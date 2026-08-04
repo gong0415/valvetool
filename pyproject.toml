@@ -1,0 +1,12 @@
+[project]
+name = "solenoid-model"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["numpy", "scipy", "matplotlib", "streamlit"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["solenoid_model/tests"]
