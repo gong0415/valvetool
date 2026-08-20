@@ -15,6 +15,7 @@ import streamlit as st
 from solenoid_model import (dynamics, flyback, fluid, impact, limits,
                             magnetics, materials, sealing, sizing, thermal,
                             winding)
+from solenoid_model import cases
 from solenoid_model.baseline import BASELINE_PARAMS
 from solenoid_model.params import ValveParams
 
@@ -308,9 +309,38 @@ def render_sealing_tab(params, seat, seat_mats, medium, cond):
                        "一次關閉的尖峰漏出質量 vs 密封後的穩態漏率對照")
 
 
+_MEDIUM_ORDER = [fluid.N2, fluid.XE, fluid.HE, fluid.WATER_20C, fluid.LN2_77K]
+
+
+def _medium_index(medium):
+    """Index of a preset medium in the selectbox; custom media fall back to N2."""
+    for i, preset in enumerate(_MEDIUM_ORDER):
+        if medium is preset:
+            return i
+    return 0
+
+
+def _key_suffix(case_name):
+    """Stable per-case widget-key suffix (Streamlit keys must be identifiers)."""
+    return "".join(ch if ch.isalnum() else "_" for ch in case_name)
+
+
 def main():
-    b = BASELINE_PARAMS
     st.title("電磁閥 參數輸入介面")
+
+    # Case selector: picking a case reseeds every sidebar default, including the
+    # duty point (P_up/T0/medium). Streamlit keeps a widget's old value when its
+    # default changes, so each widget's key is suffixed with the case name —
+    # switching cases makes them fresh widgets that adopt the new defaults.
+    case_name = st.sidebar.selectbox(
+        "設計案例", list(cases.CASES),
+        help="切換案例會一併帶入該案例的閥件參數與工況（P_up／T₀／流體）。"
+             "選定後仍可在下方各欄位手動微調")
+    case = cases.CASES[case_name]
+    b = case.params
+    k = _key_suffix(case_name)
+    if case.notes:
+        st.sidebar.caption(case.notes)
 
     _SPEC_DIR = _REPO_ROOT / "docs" / "spec"
     with st.sidebar.expander("參數示意圖", expanded=False):
@@ -318,36 +348,37 @@ def main():
                  caption="整閥剖面（詳見 docs/spec/PARAMS.md）")
 
     with st.sidebar.expander("電氣", expanded=True):
-        V_bus = st.number_input("供電電壓 (V)", value=b.V_bus, help="電磁閥線圈的驅動電壓，典型衛星匯流排電壓 22–36V")
-        R_coil_20C = st.number_input("線圈電阻 (Ω，20°C)", value=b.R_coil_20C, help="常溫下的線圈電阻，影響穩態電流大小與電氣時間常數 τ_e=L/R")
-        N_turns = st.number_input("線圈匝數", value=b.N_turns, help="線圈繞線圈數，越多電感與磁力越大，但電氣時間常數也隨之變長")
+        V_bus = st.number_input("供電電壓 (V)", value=b.V_bus, key=f"V_bus_{k}", help="電磁閥線圈的驅動電壓，典型衛星匯流排電壓 22–36V")
+        R_coil_20C = st.number_input("線圈電阻 (Ω，20°C)", value=b.R_coil_20C, key=f"R_coil_{k}", help="常溫下的線圈電阻，影響穩態電流大小與電氣時間常數 τ_e=L/R")
+        N_turns = st.number_input("線圈匝數", value=b.N_turns, key=f"N_turns_{k}", help="線圈繞線圈數，越多電感與磁力越大，但電氣時間常數也隨之變長")
 
     with st.sidebar.expander("磁路", expanded=True):
-        A_gap = st.number_input("氣隙截面積 (m²)", value=b.A_gap, format="%.2e", help="銜鐵與極面之間氣隙的有效截面積，影響磁阻與吸力大小")
-        g0 = st.number_input("靜止氣隙 (m)", value=b.g0, format="%.2e", help="未通電（銜鐵在靜止位置）時的氣隙距離")
-        x_stroke = st.number_input("行程 (m)", value=b.x_stroke, format="%.2e", help="銜鐵從靜止位置到完全吸合所需移動的距離")
-        l_core = st.number_input("鐵芯磁路長度 (m)", value=b.l_core, help="磁通在鐵芯內部行進的路徑長度，用於計算鐵芯磁阻")
-        mu_r_core = st.number_input("鐵芯相對導磁率", value=b.mu_r_core, help="數值越大，鐵芯磁阻相對氣隙磁阻越可忽略（本模型假設固定值，不做飽和非線性）")
-        B_sat = st.number_input("飽和磁通密度 (T)", value=b.B_sat, help="鐵芯材料的磁飽和上限，模擬中磁通密度若超過此值只會顯示警告，不會改變計算結果")
+        A_gap = st.number_input("氣隙截面積 (m²)", value=b.A_gap, format="%.2e", key=f"A_gap_{k}", help="銜鐵與極面之間氣隙的有效截面積，影響磁阻與吸力大小")
+        g0 = st.number_input("靜止氣隙 (m)", value=b.g0, format="%.2e", key=f"g0_{k}", help="未通電（銜鐵在靜止位置）時的氣隙距離")
+        x_stroke = st.number_input("行程 (m)", value=b.x_stroke, format="%.2e", key=f"x_stroke_{k}", help="銜鐵從靜止位置到完全吸合所需移動的距離")
+        l_core = st.number_input("鐵芯磁路長度 (m)", value=b.l_core, key=f"l_core_{k}", help="磁通在鐵芯內部行進的路徑長度，用於計算鐵芯磁阻")
+        mu_r_core = st.number_input("鐵芯相對導磁率", value=b.mu_r_core, key=f"mu_r_{k}", help="數值越大，鐵芯磁阻相對氣隙磁阻越可忽略（本模型假設固定值，不做飽和非線性）")
+        B_sat = st.number_input("飽和磁通密度 (T)", value=b.B_sat, key=f"B_sat_{k}", help="鐵芯材料的磁飽和上限，模擬中磁通密度若超過此值只會顯示警告，不會改變計算結果")
 
     with st.sidebar.expander("機械", expanded=True):
-        m_arm = st.number_input("銜鐵質量 (kg)", value=b.m_arm, format="%.4f", help="運動部件（銜鐵）的質量，影響加速度與響應速度")
-        k_spring = st.number_input("彈簧剛性 (N/m)", value=b.k_spring, help="彈簧的線性勁度係數，數值越大彈簧越硬")
-        F_preload = st.number_input("彈簧預載力 (N)", value=b.F_preload, help="銜鐵在靜止位置（x=0）時彈簧已經施加的作用力")
+        m_arm = st.number_input("銜鐵質量 (kg)", value=b.m_arm, format="%.4f", key=f"m_arm_{k}", help="運動部件（銜鐵）的質量，影響加速度與響應速度")
+        k_spring = st.number_input("彈簧剛性 (N/m)", value=b.k_spring, key=f"k_spring_{k}", help="彈簧的線性勁度係數，數值越大彈簧越硬")
+        F_preload = st.number_input("彈簧預載力 (N)", value=b.F_preload, key=f"F_preload_{k}", help="銜鐵在靜止位置（x=0）時彈簧已經施加的作用力")
 
     with st.sidebar.expander("簡化負載", expanded=True):
-        delta_P = st.number_input("壓力差 (Pa)", value=b.delta_P, format="%.2e", help="跨閥座的靜態壓力負載，視為固定值，非完整流體域模擬")
-        A_seat = st.number_input("閥座面積 (m²)", value=b.A_seat, format="%.2e", help="用來把壓力差換算成靜態作用力（壓力力 = delta_P × A_seat）")
-        damping_coeff = st.number_input("阻尼係數 (N·s/m)", value=b.damping_coeff, help="簡化的黏滯阻尼項，非第一性推導，僅為模型簡化假設")
+        delta_P = st.number_input("壓力差 (Pa)", value=b.delta_P, format="%.2e", key=f"delta_P_{k}", help="跨閥座的靜態壓力負載，視為固定值，非完整流體域模擬")
+        A_seat = st.number_input("閥座面積 (m²)", value=b.A_seat, format="%.2e", key=f"A_seat_{k}", help="用來把壓力差換算成靜態作用力（壓力力 = delta_P × A_seat）")
+        damping_coeff = st.number_input("阻尼係數 (N·s/m)", value=b.damping_coeff, key=f"damping_{k}", help="簡化的黏滯阻尼項，非第一性推導，僅為模型簡化假設")
         st.caption("⚠️ 阻尼為簡化項，非第一性推導")
 
     with st.sidebar.expander("流道幾何", expanded=True):
-        D_seat_bore = st.number_input("閥座流道孔徑 (m)", value=b.D_seat_bore, format="%.2e", help="決定流量的孔徑；A_eff(x)=min(π·D·x, π·D²/4)。基準值 0.52 mm 由「全開 Cv≈0.01」反推定案。與 A_seat（密封環受壓面積）是不同物理量")
-        C_d = st.number_input("流量係數 C_d", value=b.C_d, help="⚠️ 經驗係數（銳緣孔口典型 0.6–0.9），非第一性推導，精度約 ±15%。不要與 Cv（閥容量係數）混淆")
+        D_seat_bore = st.number_input("閥座流道孔徑 (m)", value=b.D_seat_bore, format="%.2e", key=f"D_bore_{k}", help="決定流量的孔徑；A_eff(x)=min(π·D·x, π·D²/4)。基準值 0.52 mm 由「全開 Cv≈0.01」反推定案。與 A_seat（密封環受壓面積）是不同物理量")
+        C_d = st.number_input("流量係數 C_d", value=b.C_d, key=f"C_d_{k}", help="⚠️ 經驗係數（銳緣孔口典型 0.6–0.9），非第一性推導，精度約 ±15%。不要與 Cv（閥容量係數）混淆")
 
     with st.sidebar.expander("流體耦合", expanded=True):
         fluid_enabled = st.checkbox("啟用流體耦合", value=True, help="啟用後：流體力進入銜鐵運動方程式，且開啟動態／極限掃描／密封壽命三頁籤的靜態壓力負載一律改由下方工況（P_up−P_down）推導，取代上方「壓力差」欄位。關閉＝乾跑模式（P0 行為），此時上方「壓力差」欄位才是實際生效值")
-        medium_name = st.selectbox("流體", ["N₂", "Xe", "He", "水 (20°C)", "LN₂ (77K)", "自訂氣體", "自訂液體"], help="內建物性常數見 docs/spec/PARAMS.md；自訂時輸入物性")
+        medium_name = st.selectbox("流體", ["N₂", "Xe", "He", "水 (20°C)", "LN₂ (77K)", "自訂氣體", "自訂液體"],
+                                   index=_medium_index(case.medium), key=f"medium_{k}", help="內建物性常數見 docs/spec/PARAMS.md；自訂時輸入物性")
         if medium_name == "自訂氣體":
             gamma_in = st.number_input("比熱比 γ", value=1.4)
             R_in = st.number_input("比氣體常數 R (J/kg·K)", value=296.8)
@@ -360,14 +391,15 @@ def main():
         else:
             medium = {"N₂": fluid.N2, "Xe": fluid.XE, "He": fluid.HE,
                       "水 (20°C)": fluid.WATER_20C, "LN₂ (77K)": fluid.LN2_77K}[medium_name]
-        P_up = st.number_input("上游壓力 P_up (Pa)", value=2.4e6, format="%.2e", help="上游滯止壓力（絕對壓）。預設＝基準 MEOP 2.4 MPa")
-        P_down = st.number_input("下游壓力 P_down (Pa)", value=0.0, format="%.2e", help="下游壓力（絕對壓）。預設 0＝排真空")
-        T0 = st.number_input("上游溫度 T₀ (K)", value=293.0, help="氣體分支使用的滯止溫度；液體分支不使用")
+        P_up = st.number_input("上游壓力 P_up (Pa)", value=case.cond.P_up, format="%.2e", key=f"P_up_{k}", help="上游滯止壓力（絕對壓）。預設＝基準 MEOP 2.4 MPa")
+        P_down = st.number_input("下游壓力 P_down (Pa)", value=case.cond.P_down, format="%.2e", key=f"P_down_{k}", help="下游壓力（絕對壓）。預設 0＝排真空")
+        T0 = st.number_input("上游溫度 T₀ (K)", value=case.cond.T0, key=f"T0_{k}", help="氣體分支使用的滯止溫度；液體分支不使用")
         cond = fluid.FlowConditions(P_up=P_up, P_down=P_down, T0=T0)
 
     with st.sidebar.expander("熱域", expanded=True):
         T_coil = st.number_input(
-            "線圈溫度 T_coil (K)", value=293.15, min_value=77.0, max_value=500.0,
+            "線圈溫度 T_coil (K)", value=case.T_coil, min_value=77.0, max_value=500.0,
+            key=f"T_coil_{k}",
             help="等溫假設：單次開啟（~5 ms）遠短於線圈熱時間常數（秒級），"
                  "溫度視為輸入參數。對照：233.15 K = −40°C、293.15 K = 20°C、"
                  "343.15 K = +70°C、77 K = LN₂。77 K 以下超出銅電阻表域。"
@@ -376,12 +408,12 @@ def main():
     with st.sidebar.expander("繞線窗口", expanded=False):
         st.image(str(_SPEC_DIR / "winding_window_schematic.png"))
         A_winding = st.number_input("繞線窗口面積 A_winding (m²)",
-                                    value=b.A_winding, format="%.4e",
+                                    value=b.A_winding, format="%.4e", key=f"A_win_{k}",
                                     help="鐵芯窗口可繞線的截面積，決定 R=ρ·N²/(A_w·k_fill)·l_turn")
-        k_fill = st.number_input("銅填充率 k_fill", value=b.k_fill,
+        k_fill = st.number_input("銅填充率 k_fill", value=b.k_fill, key=f"k_fill_{k}",
                                  help="銅截面佔窗口面積比例，圓線+絕緣典型 0.4–0.6")
         l_turn_mean = st.number_input("平均匝長 l_turn_mean (m)",
-                                      value=b.l_turn_mean, format="%.4e",
+                                      value=b.l_turn_mean, format="%.4e", key=f"l_turn_{k}",
                                       help="一匝的平均周長")
         R_derived = winding.coil_resistance(N_turns, A_winding, k_fill,
                                             l_turn_mean)
