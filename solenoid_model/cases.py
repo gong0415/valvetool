@@ -10,7 +10,7 @@ from a choked-flow mass-flow target at P_up=25 bar, and reading it at a
 different upstream pressure silently invalidates that bore.
 """
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from solenoid_model import fluid
 from solenoid_model.baseline import BASELINE_PARAMS
@@ -20,13 +20,20 @@ from solenoid_model.winding import coil_resistance
 
 @dataclass
 class DesignCase:
-    """A ValveParams plus the duty point it was sized against."""
+    """A ValveParams plus the duty point it was sized against.
+
+    `i_hold` is set only for peak-and-hold cases. The ODE drives the coil at a
+    constant `params.V_bus`, so it models the PEAK phase only; the hold phase is
+    a static force-balance question (does the reduced current still hold the
+    armature at the open gap?) and is recorded here rather than simulated.
+    """
     name: str
     params: ValveParams
     medium: object              # fluid.GasProperties | fluid.LiquidProperties
     cond: fluid.FlowConditions
     T_coil: float               # K, isothermal coil assumption
     notes: str = ""
+    i_hold: float = None        # A, hold-phase current; None = constant drive
 
 
 # --- N2 25 bar case ---------------------------------------------------------
@@ -112,3 +119,54 @@ BASELINE = DesignCase(
 )
 
 CASES = {c.name: c for c in (BASELINE, N2_25BAR)}
+
+
+# --- N2 25 bar, peak-and-hold drive ----------------------------------------
+# Same duty point and same valve body as N2_25BAR; only the coil and the drive
+# scheme differ.
+#
+# Constant-voltage drive forces a three-way conflict: at a fixed 28 V the MMF
+# needed to pull in (NI~163) pins the current, so cutting turns to get thicker
+# wire raises current and therefore raises hold power. Peak-and-hold breaks it
+# by noticing that pull-in and hold are different problems:
+#   - pull-in happens at the g0=0.20 mm gap and needs 16.9 mA minimum
+#   - holding happens at the 0.05 mm gap, where the same force costs 5.4 mA
+# a 3.1x current headroom that constant drive simply wastes as heat.
+#
+# So the coil is wound for the PEAK requirement (N=4000, thick 107 um wire),
+# and the hold current is dropped to 11.4 mA (~11.5% duty / ~3.2 V equivalent),
+# keeping 2.0x force margin at the open gap. Hold dissipation is I^2*R.
+#
+# Peak B at the closed gap (2.37 T) exceeds B_sat, so real pull-in force is
+# lower than the linear model reports; at the B_sat-capped current the margin
+# is still 12.7x, so pull-in is not at risk. Driving the peak phase at 24 V
+# instead of 28 V keeps B under B_sat if a designer prefers to stay linear.
+_PH_OD, _PH_ID, _PH_H = 18.0e-3, 6.0e-3, 12.0e-3
+_PH_K_FILL = 0.5
+_PH_L_TURN = 2 * math.pi * ((_PH_OD + _PH_ID) / 4)
+_PH_A_WINDING = ((_PH_OD - _PH_ID) / 2) * _PH_H
+_PH_TURNS = 4000.0
+
+N2_25BAR_PH_PARAMS = replace(
+    N2_25BAR_PARAMS,
+    N_turns=_PH_TURNS,
+    R_coil_20C=coil_resistance(_PH_TURNS, _PH_A_WINDING, _PH_K_FILL, _PH_L_TURN),
+    l_turn_mean=_PH_L_TURN,
+    k_fill=_PH_K_FILL,
+    A_winding=_PH_A_WINDING,
+)
+
+N2_25BAR_PH = DesignCase(
+    name="N₂ 25bar 峰值保持",
+    params=N2_25BAR_PH_PARAMS,
+    medium=fluid.N2,
+    cond=fluid.FlowConditions(P_up=25.0e5, P_down=0.0, T0=298.15),
+    T_coil=298.15,
+    i_hold=0.01144,
+    notes=("峰值-保持驅動。峰值 28V/99.5mA 開啟 2.72 ms；保持僅 11.4 mA"
+           "（約 11.5% duty），保持功耗 0.037 W、裕度 2.0×。線徑 107 µm"
+           "（AWG38）比定電壓版好繞。⚠️ 頁籤顯示的是峰值相；保持相為靜態"
+           "力平衡，未進 ODE。"),
+)
+
+CASES[N2_25BAR_PH.name] = N2_25BAR_PH

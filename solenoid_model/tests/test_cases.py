@@ -9,7 +9,9 @@ import math
 import pytest
 
 from solenoid_model import fluid
-from solenoid_model.cases import CASES, N2_25BAR
+from scipy.optimize import brentq
+
+from solenoid_model.cases import CASES, N2_25BAR, N2_25BAR_PH
 from solenoid_model.dynamics import simulate_opening
 from solenoid_model.magnetics import flux_density, magnetic_force_closing
 from solenoid_model.thermal import equilibrium_temp
@@ -77,3 +79,67 @@ def test_n2_opens_within_10ms():
     reached = [t for t, xv in zip(res.t, x) if xv >= p.x_stroke * 0.999]
     assert reached, "case must reach full stroke"
     assert reached[0] < 10e-3
+
+
+# --- peak-and-hold case -----------------------------------------------------
+
+def test_ph_case_same_flow_path_as_constant_drive():
+    """Peak-and-hold changes the coil and the drive, never the valve body."""
+    a, b = N2_25BAR.params, N2_25BAR_PH.params
+    assert (a.D_seat_bore, a.x_stroke, a.A_seat, a.g0, a.A_gap) == \
+           (b.D_seat_bore, b.x_stroke, b.A_seat, b.g0, b.A_gap)
+
+
+def test_ph_resistance_consistent_with_winding_window():
+    p = N2_25BAR_PH.params
+    assert coil_resistance(p.N_turns, p.A_winding, p.k_fill,
+                           p.l_turn_mean) == pytest.approx(p.R_coil_20C, rel=1e-9)
+
+
+def test_ph_wire_is_thicker_than_constant_drive():
+    """The whole point: fewer turns in a bigger window means windable wire."""
+    def wire_dia(p):
+        return math.sqrt(4 * (p.A_winding * p.k_fill / p.N_turns) / math.pi)
+    assert wire_dia(N2_25BAR_PH.params) > 1.5 * wire_dia(N2_25BAR.params)
+
+
+def test_ph_hold_current_holds_open_with_margin():
+    """Hold phase is a static force balance at the open gap, not an ODE."""
+    p = N2_25BAR_PH.params
+    gap_open = p.g0 - p.x_stroke
+    resisting = (p.F_preload + p.k_spring * p.x_stroke
+                 + N2_25BAR_PH.cond.P_up * p.A_seat)
+    assert magnetic_force_closing(gap_open, N2_25BAR_PH.i_hold, p) >= 2.0 * resisting
+
+
+def test_ph_hold_current_alone_cannot_pull_in():
+    """Confirms the design genuinely needs the peak phase — hold is not enough."""
+    p = N2_25BAR_PH.params
+    resisting = p.F_preload + N2_25BAR_PH.cond.P_up * p.A_seat
+    assert magnetic_force_closing(p.g0, N2_25BAR_PH.i_hold, p) < resisting
+
+
+def test_ph_hold_power_far_below_constant_drive():
+    p = N2_25BAR_PH.params
+    p_hold = N2_25BAR_PH.i_hold ** 2 * p.R_coil_20C
+    assert p_hold < 0.1
+    assert p_hold < 0.25 * (N2_25BAR.params.V_bus ** 2 / N2_25BAR.params.R_coil_20C)
+
+
+def test_ph_pulls_in_at_peak_even_when_saturation_capped():
+    """Peak B exceeds B_sat, so verify margin using the B_sat-capped current."""
+    p = N2_25BAR_PH.params
+    i_peak = p.V_bus / p.R_coil_20C
+    i_cap = min(i_peak, brentq(lambda i: flux_density(p.g0, i, p) - p.B_sat,
+                               1e-6, 1.0))
+    resisting = p.F_preload + N2_25BAR_PH.cond.P_up * p.A_seat
+    assert magnetic_force_closing(p.g0, i_cap, p) > 5.0 * resisting
+
+
+def test_ph_opens_faster_than_constant_drive():
+    p = N2_25BAR_PH.params
+    res = simulate_opening(p, medium=N2_25BAR_PH.medium, cond=N2_25BAR_PH.cond,
+                           T_coil=N2_25BAR_PH.T_coil)
+    x = res.y[1]
+    reached = [t for t, xv in zip(res.t, x) if xv >= p.x_stroke * 0.999]
+    assert reached and reached[0] < 4e-3
