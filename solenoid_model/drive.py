@@ -72,6 +72,43 @@ def pull_in_current(params, margin):
     return current_for_force_margin(params.g0, margin, params, F_resist)
 
 
+def force_margin_at_current(params, i):
+    """Force margin (F_mag / F_resist) at the held-open position for current i.
+
+    The forward reading of hold_current: pass the current back in and get the
+    margin out. Below 1.0 the armature drops out.
+    """
+    gap_open = params.g0 - params.x_stroke
+    F_resist = (dynamics.spring_force(params.x_stroke, params)
+                + params.delta_P * params.A_seat)
+    return magnetics.magnetic_force_closing(gap_open, i, params) / F_resist
+
+
+def max_ripple_fraction(margin):
+    """Largest fractional current sag a hold designed at `margin` survives.
+
+    Force goes as i**2, so a coil sized for `margin` reaches bare balance when
+    the current falls to 1/sqrt(margin) of nominal:
+
+        r_max = 1 - 1/sqrt(margin)
+
+    Note what is NOT in that expression: the valve. Gap, turns, seat area,
+    spring rate all cancel with the force ratio, so this is a property of the
+    chosen design margin alone and holds for any solenoid. A 2.0x force margin
+    tolerates 29.3% sag and no more -- which is a good deal less headroom than
+    "2x" sounds like, because the margin is quadratic in the quantity that
+    actually ripples.
+
+    This is the number to check a driver's ripple spec against. It does not
+    predict ripple: that takes the switching model this module omits.
+    """
+    if margin < 1.0:
+        raise ValueError(
+            f"margin={margin} is already below drop-out; a ripple budget "
+            f"is undefined")
+    return 1.0 - 1.0 / math.sqrt(margin)
+
+
 def hold_duty(i_hold, params, R=None):
     """Duty ratio needed to average `i_hold` [A] from the bus, as a fraction.
 

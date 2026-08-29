@@ -103,3 +103,53 @@ def test_rejects_duty_above_unity():
     i_unreachable = 10.0 * p.V_bus / p.R_coil_20C
     with pytest.raises(ValueError):
         drive.hold_duty(i_unreachable, p)
+
+
+def test_force_margin_at_hold_current_matches_design_intent():
+    """The PH case was sized for 2.0x; reading the margin back must confirm it."""
+    assert drive.force_margin_at_current(
+        N2_25BAR_PH_PARAMS, N2_25BAR_PH.i_hold) == pytest.approx(2.0)
+
+
+def test_force_margin_scales_as_current_squared():
+    p = N2_25BAR_PH_PARAMS
+    i = drive.hold_current(p, margin=2.0)
+    assert drive.force_margin_at_current(p, 2.0 * i) == pytest.approx(8.0)
+
+
+def test_max_ripple_fraction_is_the_sqrt_law():
+    """F ~ i^2, so margin reaches 1.0 when i_low/i_hold = 1/sqrt(margin)."""
+    assert drive.max_ripple_fraction(2.0) == pytest.approx(1.0 - 1.0 / math.sqrt(2.0))
+    assert drive.max_ripple_fraction(2.0) == pytest.approx(0.2929, abs=1e-4)
+    assert drive.max_ripple_fraction(4.0) == pytest.approx(0.5)
+
+
+def test_max_ripple_round_trips_to_unit_margin():
+    """Sagging by exactly r_max must land the force margin on 1.0 -- the
+    drop-out boundary."""
+    p = N2_25BAR_PH_PARAMS
+    for margin in (1.5, 2.0, 3.0):
+        i = drive.hold_current(p, margin=margin)
+        i_low = i * (1.0 - drive.max_ripple_fraction(margin))
+        assert drive.force_margin_at_current(p, i_low) == pytest.approx(1.0)
+
+
+def test_max_ripple_is_geometry_independent():
+    """The i^2 law cancels every valve parameter: r_max depends on the design
+    margin alone, so this holds for any solenoid, not just this case."""
+    for margin in (1.5, 2.0, 3.0):
+        r = drive.max_ripple_fraction(margin)
+        for p in (BASELINE_PARAMS, N2_25BAR_PH_PARAMS):
+            i_low = drive.hold_current(p, margin=margin) * (1.0 - r)
+            assert drive.force_margin_at_current(p, i_low) == pytest.approx(1.0)
+
+
+def test_unit_margin_tolerates_no_ripple():
+    """At bare balance there is nothing to give away."""
+    assert drive.max_ripple_fraction(1.0) == pytest.approx(0.0)
+
+
+def test_max_ripple_rejects_margin_below_unity():
+    """Below 1.0 the valve is already dropped out; a ripple budget is meaningless."""
+    with pytest.raises(ValueError):
+        drive.max_ripple_fraction(0.8)

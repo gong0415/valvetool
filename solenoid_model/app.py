@@ -336,21 +336,30 @@ def _render_hold_phase(params, case):
     f_hold = magnetics.magnetic_force_closing(gap_open, case.i_hold, params)
     p_hold = case.i_hold ** 2 * params.R_coil_20C
 
+    margin = f_hold / resisting
+    r_max = drive.max_ripple_fraction(margin) if margin >= 1.0 else 0.0
+
     with st.expander("峰值-保持驅動：保持相（靜態力平衡，非 ODE）", expanded=True):
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("保持電流", f"{case.i_hold * 1e3:.2f} mA",
                   delta=f"峰值 {i_peak * 1e3:.1f} mA")
         c2.metric("保持功耗", f"{p_hold * 1e3:.1f} mW",
                   delta=f"峰值 {params.V_bus * i_peak:.2f} W")
-        c3.metric("保持裕度", f"{f_hold / resisting:.2f}×")
+        c3.metric("保持裕度", f"{margin:.2f}×")
         c4.metric("等效 duty",
                   f"{drive.hold_duty(case.i_hold, params) * 100:.1f} %")
+        c5.metric("最大容許漣波", f"{r_max * 100:.1f} %",
+                  help="電流下擺超過此比例，磁力就低於阻力而掉閥。"
+                       "力∝電流²，所以 2.0× 力裕度只容許 29.3% 電流下擺。")
         if f_hold < resisting:
             st.error(f"保持電流不足：磁力 {f_hold:.2f} N < 阻力 {resisting:.2f} N，"
                      "閥會在保持相掉落")
         st.caption(
             f"保持相在氣隙 {gap_open * 1e3:.2f} mm（已吸合）計算："
             f"磁力 {f_hold:.2f} N vs 阻力 {resisting:.2f} N。"
+            f"上列電流與 duty 都是**週期平均值**；真正決定掉不掉閥的是漣波"
+            f"下擺的瞬時最低電流：下擺幅度須小於 {r_max * 100:.1f}%"
+            "（本模型不含切換模型，無法預測漣波大小，請查驅動 IC 規格）。"
             "下方四個頁籤全部是**峰值相**（ODE 以定電壓 V_bus 驅動），"
             "不代表保持相的電流與功耗。")
 
