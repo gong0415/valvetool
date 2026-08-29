@@ -12,7 +12,7 @@ different upstream pressure silently invalidates that bore.
 import math
 from dataclasses import dataclass, replace
 
-from solenoid_model import fluid
+from solenoid_model import drive, fluid
 from solenoid_model.baseline import BASELINE_PARAMS
 from solenoid_model.params import ValveParams
 from solenoid_model.winding import coil_resistance
@@ -129,9 +129,11 @@ CASES = {c.name: c for c in (BASELINE, N2_25BAR)}
 # needed to pull in (NI~163) pins the current, so cutting turns to get thicker
 # wire raises current and therefore raises hold power. Peak-and-hold breaks it
 # by noticing that pull-in and hold are different problems:
-#   - pull-in happens at the g0=0.20 mm gap and needs 16.9 mA minimum
-#   - holding happens at the 0.05 mm gap, where the same force costs 5.4 mA
-# a 3.1x current headroom that constant drive simply wastes as heat.
+#   - pull-in happens at the g0=0.20 mm gap and needs 25.4 mA minimum
+#   - holding happens at the 0.05 mm gap, where balance costs only 8.1 mA
+# a 3.14x current headroom that constant drive simply wastes as heat. Both
+# numbers come from drive.py's inversion of the force law, not hand algebra;
+# test_drive.py pins the ratio.
 #
 # So the coil is wound for the PEAK requirement (N=4000, thick 107 um wire),
 # and the hold current is dropped to 11.4 mA (~11.5% duty / ~3.2 V equivalent),
@@ -146,6 +148,10 @@ _PH_K_FILL = 0.5
 _PH_L_TURN = 2 * math.pi * ((_PH_OD + _PH_ID) / 4)
 _PH_A_WINDING = ((_PH_OD - _PH_ID) / 2) * _PH_H
 _PH_TURNS = 4000.0
+# Design choice, not a physical constant: 2.0x force margin at the held-open
+# gap. Stated here rather than defaulted inside drive.py so that changing the
+# design intent is a visible edit to this case.
+_PH_HOLD_MARGIN = 2.0
 
 N2_25BAR_PH_PARAMS = replace(
     N2_25BAR_PARAMS,
@@ -162,7 +168,7 @@ N2_25BAR_PH = DesignCase(
     medium=fluid.N2,
     cond=fluid.FlowConditions(P_up=25.0e5, P_down=0.0, T0=298.15),
     T_coil=298.15,
-    i_hold=0.01144,
+    i_hold=drive.hold_current(N2_25BAR_PH_PARAMS, margin=_PH_HOLD_MARGIN),
     notes=("峰值-保持驅動。峰值 28V/99.5mA 開啟 2.72 ms；保持僅 11.4 mA"
            "（約 11.5% duty），保持功耗 0.037 W、裕度 2.0×。線徑 107 µm"
            "（AWG38）比定電壓版好繞。⚠️ 頁籤顯示的是峰值相；保持相為靜態"

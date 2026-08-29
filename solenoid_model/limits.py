@@ -4,8 +4,8 @@ complete."""
 import math
 from dataclasses import replace
 
-from solenoid_model import (dynamics, fluid, impact, magnetics, sealing,
-                            winding)
+from solenoid_model import (drive, dynamics, fluid, impact, magnetics,
+                            sealing, winding)
 
 MU_0 = 4 * math.pi * 1e-7  # vacuum permeability, H/m
 
@@ -125,9 +125,12 @@ def electrical_time_constant(params, R=None, gap=None):
 def motion_threshold_current(params):
     """Coil current [A] at which the magnetic force at the rest gap first
     balances spring preload + static pressure. Below this the armature cannot
-    begin to move, however long the current is applied."""
-    dL_dx = abs(magnetics.dinductance_dgap(params.g0, params))
-    return math.sqrt(2.0 * _resisting_force_at_rest(params) / dL_dx)
+    begin to move, however long the current is applied.
+
+    Thin alias for drive.pull_in_current at unit margin, kept because the L1
+    bound reads in threshold-current terms; the inversion itself lives in
+    drive.py so the sizing and limits paths cannot drift apart."""
+    return drive.pull_in_current(params, margin=1.0)
 
 
 def response_time_bound(params, R=None):

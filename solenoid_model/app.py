@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
 
-from solenoid_model import (dynamics, flyback, fluid, impact, limits,
+from solenoid_model import (drive, dynamics, flyback, fluid, impact, limits,
                             magnetics, materials, sealing, sizing, thermal,
                             winding)
 from solenoid_model import cases
@@ -329,8 +329,10 @@ def _render_hold_phase(params, case):
     """Static force-balance summary for the hold phase of a peak-and-hold case."""
     gap_open = params.g0 - params.x_stroke
     i_peak = params.V_bus / params.R_coil_20C
-    resisting = (params.F_preload + params.k_spring * params.x_stroke
-                 + case.cond.P_up * params.A_seat)
+    # Same force balance drive.hold_current inverts, evaluated forward here so
+    # the panel and the sizing solver cannot disagree about the margin.
+    resisting = (dynamics.spring_force(params.x_stroke, params)
+                 + params.delta_P * params.A_seat)
     f_hold = magnetics.magnetic_force_closing(gap_open, case.i_hold, params)
     p_hold = case.i_hold ** 2 * params.R_coil_20C
 
@@ -341,7 +343,8 @@ def _render_hold_phase(params, case):
         c2.metric("保持功耗", f"{p_hold * 1e3:.1f} mW",
                   delta=f"峰值 {params.V_bus * i_peak:.2f} W")
         c3.metric("保持裕度", f"{f_hold / resisting:.2f}×")
-        c4.metric("等效 duty", f"{case.i_hold / i_peak * 100:.1f} %")
+        c4.metric("等效 duty",
+                  f"{drive.hold_duty(case.i_hold, params) * 100:.1f} %")
         if f_hold < resisting:
             st.error(f"保持電流不足：磁力 {f_hold:.2f} N < 阻力 {resisting:.2f} N，"
                      "閥會在保持相掉落")
