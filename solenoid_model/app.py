@@ -16,6 +16,8 @@ from solenoid_model import (drive, dynamics, flyback, fluid, impact, limits,
                             magnetics, materials, sealing, sizing, thermal,
                             winding)
 from solenoid_model import cases
+from solenoid_model import layout
+from solenoid_model.report import generate_layout
 from solenoid_model.baseline import BASELINE_PARAMS
 from solenoid_model.params import ValveParams
 
@@ -309,6 +311,76 @@ def render_sealing_tab(params, seat, seat_mats, medium, cond):
                        "一次關閉的尖峰漏出質量 vs 密封後的穩態漏率對照")
 
 
+def compute_layout(params, coil_OD=18.0e-3):
+    """Pure function: the whole physical dimension chain for one params."""
+    env = layout.envelope(params, coil_OD=coil_OD)
+    spring = layout.spring_geometry(params, **layout.SPRING_DESIGN)
+    t_arm = layout.armature_thickness(params)
+    _, _, rel = layout.armature_mass_consistency(params, t_arm)
+    return {
+        "envelope": env,
+        "wall": env["wall"],
+        "stack": env["stack"],
+        "spring": spring,
+        "armature_thickness": t_arm,
+        "armature_rel_error": rel,
+        "yoke_area": layout.yoke_area(params),
+        "pole_diameter": layout.pole_diameter(params),
+        "end_plate": layout.end_plate_thickness(params),
+        "empirical": layout.LAYOUT_EMPIRICAL,
+    }
+
+
+def render_layout_tab(params):
+    r = compute_layout(params)
+    st.subheader("實體佈局尺寸鏈")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("外徑", f"{r['envelope']['OD']*1e3:.1f} mm")
+    c2.metric("總長", f"{r['envelope']['L']*1e3:.2f} mm")
+    c3.metric("極面直徑", f"{r['pole_diameter']*1e3:.2f} mm")
+
+    st.markdown("**軸向尺寸鏈**")
+    st.table({"段": [n for n, _ in r["stack"]["segments"]],
+              "厚度 (mm)": [f"{t*1e3:.2f}"
+                            for _, t in r["stack"]["segments"]]})
+
+    st.markdown("**外殼壁厚：三個獨立下限**")
+    w = r["wall"]
+    st.table({"下限": ["磁性", "結構", "製造"],
+              "值 (mm)": [f"{w.magnetic*1e3:.2f}",
+                          f"{w.structural*1e3:.2f}",
+                          f"{w.manufacturing*1e3:.2f}"]})
+    st.caption(f"採用 {w.adopted*1e3:.2f} mm — {w.reason}")
+
+    st.markdown("**彈簧**")
+    s = r["spring"]
+    st.write(f"線徑 {s.d_wire*1e3:.2f} mm / 中徑 {s.D_coil*1e3:.2f} mm / "
+             f"有效圈數 {s.n_active:.2f} / 彈簧指數 {s.index:.2f} / "
+             f"最大剪應力 {s.tau_max/1e6:.0f} MPa / "
+             f"自由長 {s.L_free*1e3:.2f} mm")
+
+    if r["armature_rel_error"] > 0.05:
+        st.warning(
+            f"銜鐵厚度與宣告的 m_arm 不一致（偏差 "
+            f"{r['armature_rel_error']*100:.1f}%）")
+
+    st.info(
+        "⚠️ 濕式銜鐵的隔離套厚度落在徑向磁路上，但 magnetics.reluctance "
+        "未建模此項 → 實際吸力低於模型報告的裕度。")
+
+    st.markdown("**EMPIRICAL 項目**（非第一性推導）")
+    st.table({
+        "項目": list(r["empirical"].keys()),
+        "值": [f"{e['value']*1e3:.2f} mm" for e in r["empirical"].values()],
+        "理由": [e["reason"] for e in r["empirical"].values()],
+    })
+
+    for path, cap in ((generate_layout.SECTION_OUT, "按比例剖面圖"),
+                      (generate_layout.ARCH_OUT, "架構圖")):
+        if path.exists():
+            st.image(str(path), caption=cap)
+
+
 _MEDIUM_ORDER = [fluid.N2, fluid.XE, fluid.HE, fluid.WATER_20C, fluid.LN2_77K]
 
 
@@ -509,8 +581,9 @@ def main():
     if case.i_hold is not None and abs(params.V_bus - b.V_bus) < 1e-9:
         _render_hold_phase(params, case)
 
-    tab_open, tab_close, tab_limits, tab_seal = st.tabs(
-        ["開啟動態", "關閉/續流", "極限掃描 L1–L3", "密封/壽命 L4–L5"])
+    tab_open, tab_close, tab_limits, tab_seal, tab_layout = st.tabs(
+        ["開啟動態", "關閉/續流", "極限掃描 L1–L3", "密封/壽命 L4–L5",
+         "實體佈局"])
     with tab_open:
         try:
             render_opening_tab(params, medium, cond, T_coil, fluid_enabled, seat)
@@ -540,6 +613,11 @@ def main():
             render_sealing_tab(params, seat, seat_mats, medium, cond)
         except ValueError as e:
             st.error(f"密封/壽命計算失敗：{e}")
+    with tab_layout:
+        try:
+            render_layout_tab(params)
+        except ValueError as e:
+            st.error(f"佈局計算失敗：{e}")
 
 
 def render_opening_tab(params, medium, cond, T_coil, fluid_enabled, seat):
