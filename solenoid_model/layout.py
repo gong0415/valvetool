@@ -14,7 +14,6 @@ that reading a dimension tells you how much to trust it.
 import math
 from dataclasses import dataclass
 
-MU_0 = 4.0 * math.pi * 1e-7  # vacuum permeability, H/m
 RHO_FE = 7870.0              # kg/m^3, soft iron
 
 # EMPIRICAL layout inputs: packaging judgements, not derived quantities.

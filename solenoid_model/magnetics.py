@@ -56,8 +56,27 @@ def solve_flux_density(gap, i, params, mag):
 
     for B by bisection. The left side is strictly increasing in B (H(B)
     is monotonic and the gap term is linear), so the root is unique and
-    bisection cannot miss it. The bracket is [0, B_sat): H(B_sat) is
-    infinite, so the upper end is approached, never reached.
+    bisection cannot miss it. The bracket is [0, B_sat]: both curve
+    types resolve H(B_sat) to math.inf exactly at B_sat (not just as B
+    approaches it), so hi=B_sat is a valid, never-crossed upper bound
+    for either AnalyticBH (H(B) diverges continuously as B -> B_sat) or
+    TabulatedBH (H(B) is finite everywhere below B_sat, since _interp
+    clamps, and only becomes inf via the B >= B_sat check in H_of_B
+    itself). Anchoring hi exactly at B_sat, rather than pulling it back
+    by an epsilon, is what makes the bracket sound for a clamped table:
+    a table can supply only as much MMF as H_of_B(B_sat-eps) gives, and
+    that can be far short of NI, so the residual would never cross NI
+    inside a bracket that stops short of B_sat.
+
+    After the loop we back-substitute and check the MMF balance holds.
+    If NI exceeds what the curve can supply at all (a demand beyond
+    what even B=B_sat delivers -- only possible for a clamped table,
+    since an analytic law's H diverges first), bisection still returns
+    something (lo walks up to ~B_sat), but that value does not actually
+    balance the loop, so callers would silently get a physically wrong
+    B. Raise instead of returning a number that looks converged but
+    isn't; this also guards any future curve type with the same
+    clamp-instead-of-diverge shape.
 
     Sign convention: current magnitude only. Force goes as B**2, so the
     sign of i does not change the force, and a negative i would only
@@ -66,18 +85,33 @@ def solve_flux_density(gap, i, params, mag):
     NI = abs(params.N_turns * i)
     if NI == 0.0:
         return 0.0
-    lo, hi = 0.0, mag.B_sat * (1.0 - 1e-12)
+    lo, hi = 0.0, mag.B_sat
     for _ in range(_BISECT_ITERS):
         mid = 0.5 * (lo + hi)
         if mag.H_of_B(mid) * params.l_core + mid * gap / MU_0 < NI:
             lo = mid
         else:
             hi = mid
+    mmf_achieved = mag.H_of_B(lo) * params.l_core + lo * gap / MU_0
+    if not math.isclose(mmf_achieved, NI, rel_tol=1e-6, abs_tol=1e-6):
+        raise ValueError(
+            f"solve_flux_density: demanded MMF {NI:.3f} A-t exceeds what "
+            f"this B-H curve can supply (achieved {mmf_achieved:.3f} A-t "
+            f"at B={lo:.6g} T, curve B_sat={mag.B_sat:.6g} T); the curve's "
+            "table or law does not reach far enough to balance this "
+            "current at this gap")
     return lo
 
 
 def flux_density(gap, i, params, mag=None):
-    """Gap flux density [T]. mag=None -> linear circuit (unchanged)."""
+    """Gap flux density [T]. mag=None -> linear circuit (unchanged).
+
+    Sign asymmetry: with mag=None, a negative i returns a signed B of
+    matching sign. With mag supplied, solve_flux_density takes abs(N*i),
+    so the result is always the non-negative magnitude regardless of the
+    sign of i. Harmless for this codebase since force uses B**2, but a
+    trap for a future caller that reads B directly and expects a sign.
+    """
     if mag is None:
         flux = params.N_turns * i / reluctance(gap, params)
         return flux / params.A_gap
@@ -102,9 +136,13 @@ def magnetic_force_closing(gap, i, params, mag=None):
 def saturation_check(gap, i, params, mag=None):
     """True when the core is driven past B_sat.
 
-    With `mag` supplied this is always False by construction -- the
-    solver cannot return B >= B_sat -- so it reports whether the LINEAR
-    model would have exceeded B_sat, i.e. whether using `mag` changes
-    the answer materially at this operating point.
+    With `mag` supplied this is always False by construction: the
+    result comes from the NONLINEAR path (flux_density delegates to
+    solve_flux_density), whose bisection bracket cannot return B >= B_sat.
+    So passing `mag` here always reports "not saturated" regardless of
+    operating point; the useful comparison is calling this twice, once
+    with mag=None (the linear model, which can exceed B_sat) and once
+    with mag supplied, to see whether the nonlinear model changes the
+    answer at this operating point.
     """
     return flux_density(gap, i, params, mag) > params.B_sat

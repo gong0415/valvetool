@@ -94,3 +94,43 @@ def test_saturation_check_honours_mag():
     gap = PH.g0 - PH.x_stroke
     assert magnetics.saturation_check(gap, I_PEAK, PH) is True
     assert magnetics.saturation_check(gap, I_PEAK, PH, mag) is False
+
+
+def test_tabulated_bh_solver_satisfies_the_mmf_balance():
+    """TabulatedBH whose table covers the demanded MMF must solve
+    correctly and back-substitute to the same balance AnalyticBH does."""
+    analytic = magnetization.from_params(PH)
+    Hs = [h * 500.0 for h in range(1, 4000)]
+    tab = magnetization.TabulatedBH(
+        tuple((H, analytic.B_of_H(H)) for H in Hs))
+    gap = PH.g0
+    B = magnetics.solve_flux_density(gap, I_PEAK, PH, tab)
+    mmf = tab.H_of_B(B) * PH.l_core + B * gap / magnetics.MU_0
+    assert math.isclose(mmf, PH.N_turns * I_PEAK, rel_tol=1e-6)
+
+
+def test_tabulated_bh_beyond_table_raises_instead_of_silently_clamping():
+    """A TabulatedBH whose table cannot supply the demanded MMF must
+    fail loudly, not silently return the clamped table top as if it
+    were a converged, balance-satisfying answer (the P8 bug: unlike
+    AnalyticBH, TabulatedBH.H_of_B stays finite right up to B_sat
+    because _interp clamps, so a demand beyond the table's reach never
+    crosses NI during bisection)."""
+    tab = magnetization.TabulatedBH(((0.0, 0.0), (100.0, 1.0)))
+    with pytest.raises(ValueError):
+        magnetics.solve_flux_density(PH.g0, 0.1, PH, tab)
+
+
+def test_tabulated_bh_agrees_with_analytic_when_densely_sampled():
+    """A TabulatedBH sampled densely from the same analytic law as
+    AnalyticBH must agree closely through solve_flux_density -- the
+    interchangeability the module docstring and ARCHITECTURE.md claim
+    for the two curve types at the solver interface."""
+    analytic = magnetization.from_params(PH)
+    Hs = [h * 200.0 for h in range(1, 10000)]
+    tab = magnetization.TabulatedBH(
+        tuple((H, analytic.B_of_H(H)) for H in Hs))
+    for gap in (PH.g0, PH.g0 - PH.x_stroke):
+        B_analytic = magnetics.solve_flux_density(gap, I_PEAK, PH, analytic)
+        B_tab = magnetics.solve_flux_density(gap, I_PEAK, PH, tab)
+        assert math.isclose(B_analytic, B_tab, rel_tol=2e-3)
