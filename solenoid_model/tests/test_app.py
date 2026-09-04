@@ -154,12 +154,16 @@ def test_app_ui_custom_seat_pair_shows_material_inputs():
     assert any(ni.label == "恢復係數 e" for ni in at.sidebar.number_input)
 
 
-def test_app_ui_has_four_tabs_and_baseline_behavior_unchanged():
+def test_app_ui_has_five_tabs_and_baseline_behavior_unchanged():
+    # P8 Task 6 added a fifth tab ("實體佈局"); the label list below pins
+    # the new correct baseline rather than a length/subset check, so
+    # accidental tab drift is still caught.
     at = AppTest.from_file("solenoid_model/app.py", default_timeout=30)
     at.run()
     assert not at.exception
     assert [t.label for t in at.tabs] == ["開啟動態", "關閉/續流",
-                                          "極限掃描 L1–L3", "密封/壽命 L4–L5"]
+                                          "極限掃描 L1–L3", "密封/壽命 L4–L5",
+                                          "實體佈局"]
     metrics = {m.label: m.value for m in at.metric}
     assert metrics["t_open"] == "5.031 ms"
 
