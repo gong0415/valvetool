@@ -56,3 +56,18 @@
 9. **The shakedown/plastic branch test (`impact.is_shakedown`) uses the fully-plastic hardness `H`, not the first-yield pressure, and that is the unconservative direction.** Classical Hertz contact theory puts first subsurface yield at `p0 ~= 1.60*Y` while `H ~= 3*Y` (Tabor's rule), i.e. first yield actually starts around `p0 ~= 0.53*H`; every impact with `p_max` between roughly `0.53*H` and `H` is already accumulating plastic indentation, but because the test is `p_max < H` (not `p_max < 0.53*H`), `l5_life_curve` reports `N_cycle = +inf` for all of it -- this model does not track that band at all. Concretely, the shipped model claims infinite life for metal-seat impacts up to 0.280 m/s (71.3% of the diode's 0.393 m/s closing speed) and for PCTFE up to 0.111 m/s (28.2% of it) -- both verified via `scipy.optimize.brentq` on `impact.contact_pressure_max(m, v, seat, R) - seat.H`, independently confirmed by direct bisection on `impact.is_shakedown` and by a from-scratch Hertz-formula reimplementation, all three agreeing to 10 significant figures. This is the same branch criterion item 6's `ARCHARD_K`/`FAILURE_DEPTH_FRACTION` only ever apply downstream of: item 6 covers whether those coefficients are trustworthy once the plastic branch is entered, this item covers whether the model enters it at all.
 
 **Consequence of design-doc finding 6** (the ODE bounce train's impact-speed ratios converge to `e` from above, not decay by exactly `e` — see `test_dynamics_bounce.py`): the armature reaches the travel stop with almost no magnetic force margin (~28.9 N against a ~28 N spring-plus-pressure load). That near-balance means bounce excursions are a significant fraction of the stroke — the first opening-side rebound alone can fly for tens of microns: 29.41 um (9.8% of the 300 um `x_stroke`) for the PCTFE seat, 54.53 um (18.2%) for the metal seat — and any response-time estimate that assumes the valve settles immediately on first contact will understate `t_settle`.
+
+## P8 已知限制
+
+1. **隔離套磁阻未計入**：`magnetics.reluctance` 只有軸向氣隙 + 鐵芯路徑，
+   濕式銜鐵的徑向非磁性隔離套（0.25 mm）等效氣隙未建模 → 實際吸力低於
+   模型報告值。
+2. **B_sat 未含溫度效應**：B-H 曲線沿用常數 `B_sat`，高溫下實際飽和磁通
+   較低（`thermal.curie_margin` 已標註此項未建模）→ 高溫吸力被高估。
+3. **單值曲線不含損耗**：無磁滯損耗、無渦流。快速暫態下渦流會延遲磁通
+   建立（P4 已列「仍缺渦流延遲修正」），本層未改善。
+4. **既有報告數字仍為線性模式**：`cases.py` 註記與 P0–P7 各報告的裕度
+   數字皆在 `mag=None` 下產生，未以飽和模型重算。引用時須註明模式。
+5. **軸向尺寸鏈部分為 EMPIRICAL**：閥座座體與固定極厚度無一致性檢查可
+   攔截（銜鐵厚度有）。
+6. **未含公差與配合**：所有尺寸為標稱值。

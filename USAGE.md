@@ -3,7 +3,8 @@
 > 電磁閥開發工具的使用指南。新增功能後同步更新本文件（維護方式同 `ARCHITECTURE.md`）。
 > 涵蓋：P0 電磁-機械模擬與網頁介面、P1 流體函式庫與耦合、P2 熱域耦合、
 > P3 關閉瞬態/flyback、P4 繞線窗口+L1/L2 掃描、P5 L3 小型化+Buckingham π、
-> P6 密封域/L4+閥座回彈/L5+材料域、P7 GUI 四頁籤整合。
+> P6 密封域/L4+閥座回彈/L5+材料域、P7 GUI 四頁籤整合、
+> P8 B-H 飽和曲線+實體佈局（GUI 第五頁籤）。
 
 ---
 
@@ -16,7 +17,7 @@ streamlit run solenoid_model/app.py
 
 瀏覽器開啟 http://localhost:8501 。
 
-介面分成**側欄（參數輸入）**與**主畫面四頁籤（結果/掃描）**：改側欄任何數字，四個頁籤在同一次 rerun 內全部重算並重新渲染（Streamlit 的執行模型：每次互動重跑整支 script）。
+介面分成**側欄（參數輸入）**與**主畫面五頁籤（結果/掃描）**：改側欄任何數字，五個頁籤在同一次 rerun 內全部重算並重新渲染（Streamlit 的執行模型：每次互動重跑整支 script）。
 
 ### 側欄：10 個折疊區塊（由上到下）
 
@@ -31,9 +32,9 @@ streamlit run solenoid_model/app.py
 9. **繞線窗口**（預設收合）——`winding_window_schematic.png` 示意圖 + `A_winding`／`k_fill`／`l_turn_mean`；即時顯示由窗口反推的電阻 `R_derived`，與上面 `R_coil_20C` 差超過 5% 會出現黃色不一致警告
 10. **閥座/密封**（預設收合）——`seal_land_schematic.png` 示意圖 + 閥座材料對選單（`PCTFE/440C`／`17-4PH/440C`／自訂材料+恢復係數 `e`）+ `w_land`／`R_tip`（皆 ⚠️ EMPIRICAL）
 
-側欄湊出的 `ValveParams` 會同時餵給下面四個頁籤；各頁籤若吸不動/算不出（如彈簧預載過大），只有該頁籤顯示紅色錯誤訊息，其餘頁籤仍正常渲染（各頁籤各自包一層 `try/except ValueError`）。
+側欄湊出的 `ValveParams` 會同時餵給下面五個頁籤；各頁籤若吸不動/算不出（如彈簧預載過大），只有該頁籤顯示紅色錯誤訊息，其餘頁籤仍正常渲染（各頁籤各自包一層 `try/except ValueError`）。
 
-### 主畫面：四個頁籤
+### 主畫面：五個頁籤
 
 **頁籤 1「開啟動態」**——原始開啟模擬，每次側欄改動即時重算（單次 ODE 積分到吸合為止，成本低不需按鈕）：
 - **t_open** 開啟時間；流體耦合開啟時旁邊顯示與乾跑（不耦合）的差值
@@ -63,9 +64,19 @@ streamlit run solenoid_model/app.py
 - **L5**：評估撞擊速度輸入（預設取頁籤 2 最近一次關閉模擬的觸座速度，無則 0.39 m/s）；Hertz 峰值接觸應力／接觸時間／Shakedown 三個 metric；撞擊速度 vs 壽命曲線（shakedown 區間標色，疊上頁籤 2 的關閉工況點）；警語：壽命係數皆 EMPIRICAL，只能當量級參考
 - 「關閉回彈漏量尖峰」（L4×L5 耦合）：僅氣體介質可算（液體會顯示提示改選側欄氣體介質）；續流電路選單（稽納/二極體，預設稽納）+ 按鈕「計算回彈漏量尖峰（跑關閉 ODE）」——這段要重跑一次帶回彈的關閉 ODE，故按鈕觸發，結果存 `st.session_state["spike"]`；顯示關閉回彈次數、回彈離座總時間、回彈漏出質量、靜態密封漏率四個 metric
 
+**頁籤 5「實體佈局」**（P8）——把 `ValveParams` 展開成一條可製造的軸向尺寸鏈，皆為閉式解，不需按鈕：
+- 三個 metric：外徑、總長、極面直徑
+- 「軸向尺寸鏈」表：閥座座體／行程／銜鐵／工作氣隙／固定極／彈簧腔／端板 x2，依序疊加
+- 「外殼壁厚：三個獨立下限」表：磁性/結構/製造三個下限並列，並顯示採用值與判斷理由（哪一項下限最大）
+- 彈簧一行摘要：線徑/中徑/有效圈數/彈簧指數/最大剪應力/自由長（彈簧設計點取自規格 §6 的 `layout.SPRING_DESIGN`，DERIVED）
+- 銜鐵厚度與宣告的 `m_arm` 偏差超過 5% 時顯示黃色不一致警告
+- 固定提示：濕式銜鐵隔離套厚度落在徑向磁路上但 `magnetics.reluctance` 未建模，實際吸力低於模型報告的裕度
+- 「EMPIRICAL 項目」表：`layout.LAYOUT_EMPIRICAL` 五項（`t_seat_body`／`t_fixed_pole`／`t_manufacturing`／`t_sleeve`／`clearance_spring`）連同數值與理由
+- 按比例剖面圖（`layout_section.png`）與四域架構圖（`layout_architecture.png`）：兩張圖若已產生則直接顯示；未產生時頁籤留白，見下方指令自行產生
+
 ### 為什麼有些東西要按鈕才跑
 
-Streamlit 的執行模型是**每次互動整支 script 全部重跑**——包括所有四個頁籤的內容，不是只重跑被改到的那個頁籤。純解析／查表計算（L2 Pareto、L3 可行域、L4 漏率曲線、L5 壽命曲線、Hertz 接觸量、τ_e/i_th 等）成本可忽略，每次重跑都算沒問題，直接顯示。但凡是要積分 ODE 的計算——開啟模擬本身例外（單次積分到吸合，成本仍低，故也是即時重算）——只要是**多次**積分或**額外**一次較貴的積分（關閉模擬的兩段式積分、L1 掃描逐點跑 ODE、拉入電壓二分搜尋要反覆試電壓、回彈漏量尖峰要重跑一次帶回彈的關閉模擬），就會拖慢每一次側欄互動，所以一律做成按鈕，並把結果快取進 `st.session_state`，按下之後即使側欄後續改了別的參數也不會自動重算——因此每個按鈕結果旁都有「顯示的結果對應舊參數，請重按」的提示邏輯，讀者看到這行提示代表要重新按按鈕才能拿到跟當前側欄一致的數字。
+Streamlit 的執行模型是**每次互動整支 script 全部重跑**——包括所有五個頁籤的內容，不是只重跑被改到的那個頁籤。純解析／查表計算（L2 Pareto、L3 可行域、L4 漏率曲線、L5 壽命曲線、Hertz 接觸量、τ_e/i_th 等）成本可忽略，每次重跑都算沒問題，直接顯示。但凡是要積分 ODE 的計算——開啟模擬本身例外（單次積分到吸合，成本仍低，故也是即時重算）——只要是**多次**積分或**額外**一次較貴的積分（關閉模擬的兩段式積分、L1 掃描逐點跑 ODE、拉入電壓二分搜尋要反覆試電壓、回彈漏量尖峰要重跑一次帶回彈的關閉模擬），就會拖慢每一次側欄互動，所以一律做成按鈕，並把結果快取進 `st.session_state`，按下之後即使側欄後續改了別的參數也不會自動重算——因此每個按鈕結果旁都有「顯示的結果對應舊參數，請重按」的提示邏輯，讀者看到這行提示代表要重新按按鈕才能拿到跟當前側欄一致的數字。
 
 ### EMPIRICAL 警語怎麼讀
 
@@ -96,6 +107,14 @@ python3 -m solenoid_model.report.generate_p2_l6_envelope
 印出包絡表（−40°C 到 +70°C 掃描，含自熱前後兩條 `V_pull-in` 曲線）、LN₂ 77 K 域外案例（含 B_sat 飽和警告）、響應特性 4 表（`t_open` 隨溫度/電壓漂移），並更新 `l6_envelope_v_t.png` 包絡圖。基準案例：+70°C 熱浸 + 持續自熱下 `V_pull-in ≈ 21.5 V`，距 22 V 匯流排下限 ~0.5 V 裕度。
 
 基準閥件規格：28 V、MEOP 2.4 MPa、D_seat_bore 0.14 mm（全開 Cv = 0.0007，小推力等級姿控推力器閥）、t_open < 10 ms。完整參數值見 `solenoid_model/baseline.py`。
+
+實體佈局兩張圖（按比例剖面 + 四域架構，P8，用 `cases.py` 的 `N2_25BAR_PH_PARAMS`）：
+
+```bash
+.venv/bin/python -m solenoid_model.report.generate_layout
+```
+
+更新 `docs/spec/layout_section.png`（按真實 mm 比例的軸對稱半剖圖）與 `docs/spec/layout_architecture.png`（電氣/磁/機械/流體四域方塊圖）；GUI 頁籤 5「實體佈局」若找不到這兩個檔案會留白，需先跑一次此指令。
 
 ## 方式三：寫 Python（功能最完整）
 
@@ -233,7 +252,7 @@ life = limits.l5_life_curve(P, seat, velocities=[0.4, 0.8, 1.5])
 |---|---|
 | 每個參數的意義、單位、常見誤解警告 | `docs/spec/PARAMS.md` + 對照圖 `docs/spec/valve_schematic.png` |
 | 三個「面積」的差別（A_gap / A_seat / D_seat_bore） | `docs/spec/PARAMS.md` 的三面積辨析章節 |
-| 工作項目編號（P0–P7）與模組總表 | `ROADMAP.md` |
+| 工作項目編號（P0–P8）與模組總表 | `ROADMAP.md` |
 | 資料夾結構 | `ARCHITECTURE.md` |
 | 規格書（任務需求來源） | `docs/spec/solenoid_valve_first_principles.md` |
 | 已知模型簡化項（誠實原則清單） | `solenoid_model/report/MODEL_NOTES.md` |
@@ -241,15 +260,16 @@ life = limits.l5_life_curve(P, seat, velocities=[0.4, 0.8, 1.5])
 ## 驗證安裝／改動後一切正常
 
 ```bash
-uv run --with pytest python -m pytest solenoid_model -q   # 應顯示 222 passed
+.venv/bin/python -m pytest solenoid_model/tests/ -q   # 應顯示 316 passed
 ```
 
-⚠️ 專案 venv 未安裝 pytest：直接跑裸 `pytest` 或 `uv run pytest` 會解析到缺 scipy/streamlit 的直譯器，13 個測試模組會直接 collection error。務必用上面 `uv run --with pytest python -m pytest` 的完整寫法。
+⚠️ 直接跑裸 `pytest` 可能解析到系統直譯器（缺 scipy/streamlit），測試模組會直接 collection error。務必用上面 `.venv/bin/python -m pytest` 的完整寫法，確保吃到專案 venv。
 
 ## 已知限制（依誠實原則揭露）
 
 - `C_d`（流量係數）為經驗係數（預設 0.8，典型 0.6–0.9，精度約 ±15%），非第一性推導
 - `damping_coeff`（阻尼）為工程佔位值，非第一性推導
-- 磁飽和只做警告旗標，未做非線性 B-H 曲線；渦流延遲未建模
+- 磁飽和：`mag=None`（預設）只做警告旗標，不做非線性 B-H 曲線；傳入 `magnetization.AnalyticBH`/`TabulatedBH`（P8）才真的求解飽和磁路，但單值曲線仍不含磁滯（刻意排除，見 `docs/spec/PARAMS.md`「磁化模型參數」）；渦流延遲未建模
 - 流體力已耦合進運動方程式（P1）；未含射流角 cosθ 修正（高估關閉力）；不模擬逆流與兩相流動力學
-- 熱域（P2）：`G_th_cond`/`emissivity`/`A_rad` 為 EMPIRICAL 量級估計，非量測值；`equilibrium_temp` 僅定電流保守假設（定電壓自穩定情境未建模）；B_sat 隨溫度的退化（居里點附近磁飽和下降）未建模；暫態 T(t)（熱累積、脈衝模式）明確排除於 P2
+- 熱域（P2）：`G_th_cond`/`emissivity`/`A_rad` 為 EMPIRICAL 量級估計，非量測值；`equilibrium_temp` 僅定電流保守假設（定電壓自穩定情境未建模）；B_sat 隨溫度的退化（居里點附近磁飽和下降）未建模（P8 的 B-H 曲線同樣未含溫度效應）；暫態 T(t)（熱累積、脈衝模式）明確排除於 P2
+- 實體佈局（P8）：濕式銜鐵隔離套（0.25 mm）未計入 `magnetics.reluctance`（實際吸力低於模型報告值）；閥座座體/固定極厚度為無一致性檢查的 EMPIRICAL 值；所有尺寸為標稱值，未含公差與配合；`cases.py` 與 P0–P7 各報告的裕度數字皆在 `mag=None` 線性模式下產生，未以飽和模型重算——完整清單見 `solenoid_model/report/MODEL_NOTES.md`「P8 已知限制」

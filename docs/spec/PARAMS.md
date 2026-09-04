@@ -19,8 +19,8 @@
 | `g0` | 靜止氣隙 | m | 未通電時的磁氣隙 | `g0 ≥ x_stroke`；差值為殘餘氣隙（防磁滯黏著） |
 | `x_stroke` | 行程 | m | 銜鐵從靜止到全開的位移 | 位移座標 x 由 0（閉）增加到 x_stroke（開）；`gap = g0 − x` |
 | `l_core` | 鐵芯磁路長度 | m | 磁通在鐵芯內的路徑長度 | — |
-| `mu_r_core` | 鐵芯相對導磁率 | – | 固定值線性磁路假設 | 未建模 B-H 飽和曲線；超過 B_sat 只警告不改結果 |
-| `B_sat` | 飽和磁通密度 | T | 材料磁飽和上限（純鐵 ~2.15、Hiperco50 ~2.4、430F ~1.6） | 僅用於警告旗標 |
+| `mu_r_core` | 鐵芯相對導磁率 | – | 線性磁路假設下的固定值；亦是 `mag` 傳入 `AnalyticBH` 時的初始導磁率 | `mag=None`（預設）時未建模 B-H 飽和曲線，超過 B_sat 只警告不改結果；傳入 B-H 曲線（見下方「磁化模型（P8）」）才真的限制吸力 |
+| `B_sat` | 飽和磁通密度 | T | 材料磁飽和上限（純鐵 ~2.15、Hiperco50 ~2.4、430F ~1.6） | `mag=None` 時僅用於警告旗標；傳入 B-H 曲線時是曲線本身的漸近上限 |
 
 ### 機械
 | 欄位 | 中文 | 單位 | 定義 | 常見誤解 |
@@ -275,3 +275,45 @@ phi_c = 0.42     # 二維連續滲流理論值；文獻實測 0.40-0.50，故標
 ### `seat` 是第四個正交模式旋鈕
 
 沿用 `medium`/`cond`、`T_coil` 建立的雙模式鐵律：`dynamics.simulate_opening`/`simulate_closing` 的 `seat=None`（預設）維持原止擋硬鉗制，對既有呼叫者 bit-level 不變；傳入 `sealing.SeatPair` 才於接觸事件 `v → -e·v` 反射後繼續積分回彈序列，以 `v_min`（預設 0.01 m/s）與 `n_max`（預設 50）雙重終止。`t_close`/`t_release` 語意不變（仍指首次觸座），回彈新增 `.bounce.t_settle`/`.bounce.n_bounce`/`.bounce.v_impacts`。
+
+## 磁化模型參數（`magnetization.py`／`magnetics.py`，P8）
+
+### `mag` 是第五個正交模式旋鈕
+
+沿用 `medium`/`cond`、`T_coil`、`seat` 建立的雙模式鐵律：`magnetics.flux_density`／`magnetic_force_closing`／`saturation_check` 的 `mag=None`（預設）維持既有線性磁路（固定 `mu_r_core`），對既有呼叫者 bit-level 不變；傳入 `magnetization.AnalyticBH` 或 `TabulatedBH` 才切換到飽和磁路，由 `magnetics.solve_flux_density` 對 B 二分求解 MMF 平衡 `H(B)·l_core + B·gap/μ₀ = N·i`。`drive.py` 的 `current_for_force_margin`／`hold_current`／`pull_in_current`／`force_margin_at_current` 同步支援 `mag`：線性模式維持原封閉解，飽和模式改用 `scipy.optimize.brentq` 數值反解。
+
+`AnalyticBH`（Fröhlich-Kennelly 解析式 `B(H) = μᵢH / (1 + μᵢH/B_sat)`）**不新增任何自由度**——兩個常數直接取自既有的 `mu_r_core`／`B_sat`，`magnetization.from_params(params)` 一行建構；`TabulatedBH` 供量測 (H, B) 點分段線性內插，超出量測範圍**鉗位而非外推**（外推 B-H 曲線會產生無界、不合物理的 B）。兩者刻意**不含磁滯**：單值曲線只模擬飽和，不模擬殘留磁化——對本閥而言這是對的取捨，氣隙主導的磁路殘留吸力僅 ~0.02 N，對比彈簧預載 2.2 N 差兩個數量級，不構成閥門卡死風險；換磁滯模型則會讓 ODE 從無記憶變成有磁化歷史相依，代價遠大於此處省下的精度。
+
+### 線性模型在此閥有多不準
+
+`N2_25BAR_PH_PARAMS`（見 `cases.py`）在閉合氣隙、峰值電流下：線性模式報 B=8.16 T（遠超任何真實鐵磁材料，不合物理）；换上 `AnalyticBH` 後為 2.03 T。沿整個行程比較吸力：線性模式從 44.58 N 暴增到 530.30 N（近 12 倍，形狀是「氣隙關閉、吸力失控」）；飽和模式僅從 26.47 N 升到 32.70 N（+24%）。「吸力隨氣隙關閉暴增」是線性模型的假象，不是閥的真實行為。
+
+⚠️ **`cases.py` 與既有各報告（P0–P7）的裕度數字皆在 `mag=None` 線性模式下產生，未以飽和模型重算**——包含 `N2_25BAR_PH` 案例本身：其 `i_hold` 是用線性 `drive.hold_current` 解出、宣稱 2.0× 保持裕度，但以 `mag` 重新讀出的真實裕度僅 **1.60×**；要達到真 2.0× 需 13.07 mA（非既有的 11.44 mA），保持功耗隨之從 0.0368 W 升到 0.0481 W。引用任何既有裕度數字前，先確認該計算是否傳了 `mag`。
+
+## 實體佈局參數（`layout.py`，P8）
+
+> 對照圖：![layout section](layout_section.png)（由 `solenoid_model/report/generate_layout.py` 的 `generate_section()` 產生，按真實 mm 比例繪製，修改尺寸鏈時同步更新；另有 `layout_architecture.png` 為四物理域架構示意）
+
+`layout.py` 是第 2 層的純代數分支（不 import `dynamics`/`magnetics`/`fluid`），把 `ValveParams` 已有的欄位推導成一條可製造的軸向尺寸鏈與外殼壁厚。核心區分是 **DERIVED vs EMPIRICAL**：磁軛截面、壁厚、彈簧幾何、銜鐵厚度皆由既有物理欄位算出；閥座座體與固定極厚度算不出來，是封裝判斷，集中宣告在模組常數 `LAYOUT_EMPIRICAL`，不埋在函式預設值裡。
+
+### `LAYOUT_EMPIRICAL` 各項物理意義
+
+| 鍵 | 值 | 物理意義 |
+|---|---|---|
+| `t_seat_body` | 3.0 mm | 閥座座體厚度：容納流道孔、密封 land 與閥座壓入配合的最小厚度；無一致性檢查可攔截，須由 CAD 階段回頭確認 |
+| `t_fixed_pole` | 4.0 mm | 固定極厚度：需容納磁通轉向與繞線骨架端面支撐；本模型未解 3D 磁通分佈，厚度不足會在極面根部先飽和，故取封裝經驗值 |
+| `t_manufacturing` | 1.0 mm | 外殼壁厚的可加工與剛性下限；本閥的磁性下限（0.35 mm）與結構下限（0.33–0.44 mm）皆遠低於此，故外殼壁厚實際由此項決定，不是由物理決定 |
+| `t_sleeve` | 0.25 mm | 濕式銜鐵的非磁性隔離套（316L）；25 bar 下結構只需 0.11 mm，餘為加工餘裕；⚠️ 此厚度落在徑向磁路上但 `magnetics.reluctance` 未建模，故實際吸力低於模型報告值（見 MODEL_NOTES.md P8 限制 1） |
+| `clearance_spring` | 0.1 mm | 彈簧全壓縮時與腔壁的餘隙，避免併圈干涉 |
+
+比照 P5 的 `k_pack`/`J_max`、P6 的 `w_land`/`R_tip` 處理方式：這些欄位只在呼叫 `layout.*` 時使用，`dynamics.simulate_opening`/`simulate_closing` 完全不碰，不影響既有 ODE 行為。
+
+`SPRING_DESIGN`（模組常數，非 `LAYOUT_EMPIRICAL` 成員）是規格 §6 解出的彈簧設計點（線徑 0.35 mm、中徑 1.8 mm、302 不鏽鋼 G=79 GPa），**屬 DERIVED**：由既有 `k_spring`/`F_preload` 反解圈數與應力，不是額外的封裝猜測，這也是它不放進 `LAYOUT_EMPIRICAL` 的原因。
+
+### 外殼壁厚：三下限取大者
+
+`shell_wall_thickness` 回傳 `WallThickness`（`magnetic`／`structural`／`manufacturing`／`adopted`／`reason` 五欄），三個獨立下限：磁通連續性要求的磁性下限、內壓 hoop 應力要求的結構下限、`t_manufacturing` 的製造下限，取三者最大者。在 `N2_25BAR_PH` 案例上磁性 0.35 mm、結構 0.33 mm 皆低於製造下限 1.00 mm，故實際壁厚由製造決定——回傳三個數字而非只回傳贏家，正是為了讓這個結論可見。
+
+### 整閥包絡
+
+`layout.envelope(params, coil_OD)` 給出外徑與總長。`N2_25BAR_PH` 案例：外徑 20.0 mm × 總長 18.679 mm。
