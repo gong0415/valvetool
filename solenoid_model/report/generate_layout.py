@@ -50,16 +50,32 @@ def generate_section(params=N2_25BAR_PH_PARAMS):
 
     with matplotlib.rc_context(_CJK_FONT_RC):
         fig, ax = plt.subplots(figsize=(8, 10))
+        # 淨空標註用的引線終點：避開外殼標籤（位於 R_shell+wall+0.6），
+        # 拉遠到 R_shell+wall+2.4 之外的空白區
+        x_lead = _mm(R_shell + wall) + 2.4
         y = 0.0
-        # 閥座座體
+        # 閥座座體（先畫實體，流道孔再疊在上面「挖空」，避免孔看起來像脫離的碎片）
         ax.add_patch(Rectangle((0, _mm(y)), _mm(R_shell + wall),
                                _mm(t_seat), fc=COL_NONMAG, ec="k"))
-        ax.text(_mm(R_shell) * 0.55, _mm(y + t_seat / 2), "閥座座體",
+        ax.text(_mm(R_shell) * 0.7, _mm(y + t_seat / 2), "閥座座體",
                 ha="center", va="center", fontsize=8)
-        # 流道孔
-        ax.add_patch(Rectangle((0, _mm(y)), _mm(params.D_seat_bore / 2),
-                               _mm(t_seat), fc="w", ec=COL_SEAL, lw=1.5))
+        # 流道孔：白色填色挖空座體，僅在孔口（頂邊）與孔壁（右邊）畫線，
+        # 底邊與軸心邊不畫線，讀作貫穿座體的孔而非獨立色塊
+        r_bore = _mm(params.D_seat_bore / 2)
+        ax.add_patch(Rectangle((0, _mm(y)), r_bore, _mm(t_seat),
+                               fc="w", ec="none", zorder=2))
+        ax.plot([0, r_bore, r_bore], [_mm(y), _mm(y), _mm(y + t_seat)],
+                color=COL_SEAL, lw=1.5, zorder=3)
+        ax.annotate(
+            f"流道孔徑 D_seat_bore = {_mm(params.D_seat_bore):.2f} mm",
+            xy=(r_bore, _mm(y + t_seat / 2)),
+            xytext=(x_lead, _mm(y + t_seat / 2) - 3.6),
+            fontsize=7.5, color=COL_SEAL, ha="left", va="center",
+            arrowprops=dict(arrowstyle="-", color=COL_SEAL, lw=0.9,
+                            shrinkA=0, shrinkB=2,
+                            connectionstyle="angle,angleA=0,angleB=90,rad=2"))
         y += t_seat
+        y_stroke_lo, y_stroke_hi = y, y + params.x_stroke
         y += params.x_stroke      # 行程（閥開時的間隙）
         # 銜鐵
         ax.add_patch(Rectangle((0, _mm(y)), _mm(r_core), _mm(t_arm),
@@ -67,12 +83,33 @@ def generate_section(params=N2_25BAR_PH_PARAMS):
         ax.text(_mm(r_core) / 2, _mm(y + t_arm / 2), "銜鐵",
                 ha="center", va="center", fontsize=8, color="w")
         y += t_arm
+        y_gap_lo, y_gap_hi = y, y + params.g0
         y += params.g0            # 工作氣隙
         # 固定極
         ax.add_patch(Rectangle((0, _mm(y)), _mm(r_core), _mm(t_pole),
                                fc=COL_MAG, ec="k"))
         ax.text(_mm(r_core) / 2, _mm(y + t_pole / 2), "固定極",
                 ha="center", va="center", fontsize=8, color="w")
+        # 行程與工作氣隙：次毫米級間隙，用水平引線標到右側淨空帶。
+        # 兩個間隙都只在 r=0..r_core 之間是實際的間隙本體；r_core 以外
+        # 到線圈／殼體之間在這兩個 y 高度都是空白（工作氣隙的 y 範圍雖被
+        # 線圈徑向涵蓋，但線圈本身在該處是連續色塊，引線改壓在線圈上緣
+        # 之外沒有更乾淨的路徑，故仍以 shrinkB 留出間距、線寬細一點降低
+        # 視覺干擾），引線起點取 r_core，終點在外殼標籤右側的淨空區
+        ax.annotate(
+            f"行程 x_stroke = {_mm(y_stroke_hi - y_stroke_lo):.2f} mm",
+            xy=(_mm(r_core), _mm((y_stroke_lo + y_stroke_hi) / 2)),
+            xytext=(x_lead, _mm((y_stroke_lo + y_stroke_hi) / 2)),
+            fontsize=8, color=COL_MECH, ha="left", va="center",
+            arrowprops=dict(arrowstyle="-", color=COL_MECH, lw=1.0,
+                            shrinkA=0, shrinkB=2))
+        ax.annotate(
+            f"工作氣隙 g0 = {_mm(y_gap_hi - y_gap_lo):.2f} mm",
+            xy=(_mm(r_core), _mm((y_gap_lo + y_gap_hi) / 2)),
+            xytext=(x_lead, _mm((y_gap_lo + y_gap_hi) / 2)),
+            fontsize=9, color=COL_MAG, ha="left", va="center",
+            arrowprops=dict(arrowstyle="-", color=COL_MAG, lw=1.0,
+                            shrinkA=0, shrinkB=2))
         # 線圈（在固定極與銜鐵徑向外側）
         y_coil = y - COIL_H / 2
         ax.add_patch(Rectangle((_mm(COIL_ID / 2), _mm(y_coil)),
@@ -113,7 +150,7 @@ def generate_section(params=N2_25BAR_PH_PARAMS):
         ax.text(-1.6, _mm(y) / 2, f"總長 {_mm(env['L']):.2f} mm",
                 rotation=90, ha="center", va="center", fontsize=9,
                 color=COL_MECH)
-        ax.set_xlim(-3, _mm(R_shell + wall) + 4)
+        ax.set_xlim(-3, _mm(R_shell + wall) + 10)
         ax.set_ylim(-1.5, _mm(y) + 2)
         ax.set_aspect("equal")
         ax.set_xlabel("半徑 (mm)")
@@ -136,12 +173,15 @@ def generate_architecture():
         def box(x, y, w, h, label, color):
             ax.add_patch(Rectangle((x, y), w, h, fc=color, ec="k",
                                    alpha=0.25, lw=1.5))
-            ax.text(x + w / 2, y + h - 0.35, label, ha="center",
-                    va="top", fontsize=10, weight="bold")
+            # CJK 後援字型（Arial Unicode MS 等）沒有 bold 字重，
+            # weight="bold" 會靜默退回 regular（產生 findfont 警告卻無視覺
+            # 效果），故改用放大字級來做標題強調，而非依賴 bold
+            ax.text(x + w / 2, y + h - 0.3, label, ha="center",
+                    va="top", fontsize=11.5)
 
-        def node(x, y, text):
-            ax.add_patch(Rectangle((x, y), 2.0, 0.7, fc="w", ec="k"))
-            ax.text(x + 1.0, y + 0.35, text, ha="center", va="center",
+        def node(x, y, text, w=2.0):
+            ax.add_patch(Rectangle((x, y), w, 0.7, fc="w", ec="k"))
+            ax.text(x + w / 2, y + 0.35, text, ha="center", va="center",
                     fontsize=8)
 
         def arrow(a, b, color="k", style="-|>"):
@@ -162,27 +202,36 @@ def generate_architecture():
         arrow((5.4, 5.95), (6.6, 5.95))
         arrow((7.6, 5.6), (7.6, 5.1)); arrow((7.6, 5.1), (5.4, 5.1))
 
-        box(0.3, 2.4, 4.6, 1.9, "機械域", COL_MECH)
-        node(0.6, 3.3, "銜鐵 0.8 g"); node(2.7, 3.3, "彈簧 4000 N/m")
-        node(1.6, 2.55, "閥座止擋")
-        arrow((2.6, 3.65), (2.7, 3.65))
+        # 機械域／流體域：加高方塊（1.9→2.9）讓標題與第一排節點之間留出
+        # 清楚間距（標題錨點 y=4.35，第一排節點上緣 y=3.85，間隙 0.5），
+        # 且節點改用較窄寬度（1.85）並在兩節點間留 0.3 間隙，避免節點
+        # 方塊互相貼邊；第二排節點（閥座止擋／壅塞流）與第一排之間也留
+        # 0.25 間隙，不與其上緣重疊
+        box(0.3, 1.7, 4.6, 2.9, "機械域", COL_MECH)
+        node(0.55, 3.15, "銜鐵 0.8 g", w=1.85)
+        node(2.7, 3.15, "彈簧 4000 N/m", w=1.85)
+        node(1.6, 2.2, "閥座止擋", w=1.85)
 
-        box(5.1, 2.4, 4.6, 1.9, "流體域", COL_SEAL)
-        node(5.4, 3.3, "N₂ 25 bar"); node(7.5, 3.3, "孔徑 0.60 mm")
-        node(6.4, 2.55, "1.28 g/s 壅塞流")
-        arrow((7.4, 3.65), (7.5, 3.65))
+        box(5.1, 1.7, 4.6, 2.9, "流體域", COL_SEAL)
+        node(5.35, 3.15, "N₂ 25 bar", w=1.85)
+        node(7.5, 3.15, "孔徑 0.60 mm", w=1.85)
+        node(6.4, 2.2, "1.28 g/s 壅塞流", w=1.85)
 
         # 跨域耦合點
         arrow((7.6, 5.6), (7.6, 4.3), color=COL_MAG)
         ax.text(7.75, 4.9, "耦合①\n氣隙：磁↔機械", fontsize=8, color=COL_MAG)
-        arrow((2.6, 2.55), (5.4, 2.55), color=COL_SEAL, style="<->")
-        ax.text(3.0, 2.2, "耦合②　閥座：機械↔流體", fontsize=8, color=COL_SEAL)
+        # 耦合②：改在兩個方塊的交界正下方（低於兩者的下緣 y=1.7）水平
+        # 連接，不再貫穿機械域／流體域方塊內部；箭頭、標籤、下方註腳三者
+        # 之間各留 >=0.3 的垂直間距，避免彼此貼在一起
+        arrow((2.6, 1.4), (5.4, 1.4), color=COL_SEAL, style="<->")
+        ax.text(4.0, 1.1, "耦合②　閥座：機械↔流體", ha="center",
+                fontsize=8, color=COL_SEAL)
 
-        ax.text(5.0, 0.9,
+        ax.text(5.0, 0.35,
                 "耦合①：氣隙同時決定磁阻與機械位置（dynamics.coupled_rhs）\n"
                 "耦合②：閥座開度決定流量，噴流反作用力回饋進力平衡",
                 ha="center", fontsize=8.5)
-        ax.set_xlim(0, 10); ax.set_ylim(0.4, 9.2)
+        ax.set_xlim(0, 10); ax.set_ylim(-0.5, 9.2)
         ax.axis("off")
         ax.set_title("電磁閥架構圖：四個物理域與跨域耦合點", fontsize=12)
         ARCH_OUT.parent.mkdir(parents=True, exist_ok=True)
