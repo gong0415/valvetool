@@ -66,14 +66,17 @@ def generate_section(params=N2_25BAR_PH_PARAMS):
                                fc="w", ec="none", zorder=2))
         ax.plot([0, r_bore, r_bore], [_mm(y), _mm(y), _mm(y + t_seat)],
                 color=COL_SEAL, lw=1.5, zorder=3)
-        ax.annotate(
-            f"流道孔徑 D_seat_bore = {_mm(params.D_seat_bore):.2f} mm",
-            xy=(r_bore, _mm(y + t_seat / 2)),
-            xytext=(x_lead, _mm(y + t_seat / 2) - 3.6),
-            fontsize=7.5, color=COL_SEAL, ha="left", va="center",
-            arrowprops=dict(arrowstyle="-", color=COL_SEAL, lw=0.9,
-                            shrinkA=0, shrinkB=2,
-                            connectionstyle="angle,angleA=0,angleB=90,rad=2"))
+        # 標籤文字固定在座體中段高度（y=t_seat/2），落在 x_lead 右側淨空
+        # 帶內、x 軸刻度標籤上方，不落到座標軸下緣以外與刻度文字重疊。
+        # 直接以純水平線連接（xy/xytext 同一 y），改用 ax.plot 而非
+        # annotate 的 "angle" connectionstyle，避免其在零垂直分量下
+        # 除以零產生 RuntimeWarning
+        y_bore_label = _mm(y + t_seat / 2)
+        ax.plot([r_bore, x_lead], [y_bore_label, y_bore_label],
+                color=COL_SEAL, lw=0.9)
+        ax.text(x_lead, y_bore_label,
+                f" 流道孔徑 D_seat_bore = {_mm(params.D_seat_bore):.2f} mm",
+                fontsize=7.5, color=COL_SEAL, ha="left", va="center")
         y += t_seat
         y_stroke_lo, y_stroke_hi = y, y + params.x_stroke
         y += params.x_stroke      # 行程（閥開時的間隙）
@@ -90,28 +93,37 @@ def generate_section(params=N2_25BAR_PH_PARAMS):
                                fc=COL_MAG, ec="k"))
         ax.text(_mm(r_core) / 2, _mm(y + t_pole / 2), "固定極",
                 ha="center", va="center", fontsize=8, color="w")
-        # 行程與工作氣隙：次毫米級間隙，用水平引線標到右側淨空帶。
-        # 兩個間隙都只在 r=0..r_core 之間是實際的間隙本體；r_core 以外
-        # 到線圈／殼體之間在這兩個 y 高度都是空白（工作氣隙的 y 範圍雖被
-        # 線圈徑向涵蓋，但線圈本身在該處是連續色塊，引線改壓在線圈上緣
-        # 之外沒有更乾淨的路徑，故仍以 shrinkB 留出間距、線寬細一點降低
-        # 視覺干擾），引線起點取 r_core，終點在外殼標籤右側的淨空區
-        ax.annotate(
-            f"行程 x_stroke = {_mm(y_stroke_hi - y_stroke_lo):.2f} mm",
-            xy=(_mm(r_core), _mm((y_stroke_lo + y_stroke_hi) / 2)),
-            xytext=(x_lead, _mm((y_stroke_lo + y_stroke_hi) / 2)),
-            fontsize=8, color=COL_MECH, ha="left", va="center",
-            arrowprops=dict(arrowstyle="-", color=COL_MECH, lw=1.0,
-                            shrinkA=0, shrinkB=2))
-        ax.annotate(
-            f"工作氣隙 g0 = {_mm(y_gap_hi - y_gap_lo):.2f} mm",
-            xy=(_mm(r_core), _mm((y_gap_lo + y_gap_hi) / 2)),
-            xytext=(x_lead, _mm((y_gap_lo + y_gap_hi) / 2)),
-            fontsize=9, color=COL_MAG, ha="left", va="center",
-            arrowprops=dict(arrowstyle="-", color=COL_MAG, lw=1.0,
-                            shrinkA=0, shrinkB=2))
-        # 線圈（在固定極與銜鐵徑向外側）
+        # 行程與工作氣隙：次毫米級間隙，用引線標到右側淨空帶。兩個間隙的
+        # y 範圍都落在線圈徑向涵蓋之內（線圈 r=3.0-9.0mm），若引線直接
+        # 水平拉到 x_lead 會整條穿過線圈色塊與「線圈 4000 匝」文字，看起
+        # 來像是線圈的一部分。改成在間隙本體的淨空半徑帶（r_core 與線圈
+        # 內緣 COIL_ID/2 之間，此帶內僅有薄薄的隔離套，仍留有可見空隙）
+        # 先水平拉一小段，再垂直折到線圈外緣正上／正下方的淨空 y，最後
+        # 水平拉到標籤：三段都不與線圈本體重疊。
+        # 垂直段刻意離開 r_core 一點（不緊貼銜鐵/固定極的黑色描邊），
+        # 避免細線被同一 x 上的元件邊框線蓋掉而不可見。
+        # （y_coil 提前算出：線圈實際繪製於本函式稍後，但幾何在此已確定）
         y_coil = y - COIL_H / 2
+        y_coil_top = _mm(y_coil + COIL_H)
+        y_coil_bot = _mm(y_coil)
+        y_stroke_mid = _mm((y_stroke_lo + y_stroke_hi) / 2)
+        y_gap_mid = _mm((y_gap_lo + y_gap_hi) / 2)
+        y_stroke_lead = y_coil_bot - 0.6
+        y_gap_lead = y_coil_top + 0.6
+        r_stub = _mm(r_core) + 0.35  # 離開元件描邊，落在隔離套內緣之前的淨空帶
+        ax.plot([_mm(r_core), r_stub, r_stub, x_lead],
+                [y_stroke_mid, y_stroke_mid, y_stroke_lead, y_stroke_lead],
+                color=COL_MECH, lw=1.0, solid_capstyle="butt")
+        ax.text(x_lead, y_stroke_lead,
+                f" 行程 x_stroke = {_mm(y_stroke_hi - y_stroke_lo):.2f} mm",
+                fontsize=8, color=COL_MECH, ha="left", va="center")
+        ax.plot([_mm(r_core), r_stub, r_stub, x_lead],
+                [y_gap_mid, y_gap_mid, y_gap_lead, y_gap_lead],
+                color=COL_MAG, lw=1.0, solid_capstyle="butt")
+        ax.text(x_lead, y_gap_lead,
+                f" 工作氣隙 g0 = {_mm(y_gap_hi - y_gap_lo):.2f} mm",
+                fontsize=9, color=COL_MAG, ha="left", va="center")
+        # 線圈（在固定極與銜鐵徑向外側；y_coil 已於上方引線區塊算出）
         ax.add_patch(Rectangle((_mm(COIL_ID / 2), _mm(y_coil)),
                                _mm((COIL_OD - COIL_ID) / 2), _mm(COIL_H),
                                fc=COL_COIL, ec="k"))
