@@ -1,15 +1,19 @@
 """Drive-point solvers: what coil current does a given gap require?
 
-Every function here inverts the same linear-magnetics force law that
-dynamics.py integrates forward,
+Every function here inverts the same force law that dynamics.py integrates
+forward, in one of two modes selected by the optional `mag` argument.
+`mag=None` (the default) is the linear-magnetics closed form,
 
     F_mag(gap, i) = 0.5 * i**2 * |dL/dgap|   ->   i = sqrt(2*F / |dL/dgap|)
 
-so a design point solved here and a point simulated there cannot disagree.
-There are no empirical constants in this module: the force law, the spring
-law, and KVL are the whole content. Force margin is a *design choice* and is
-therefore always an explicit argument, never a default hiding a judgement
-call.
+so a design point solved here and a linear point simulated there cannot
+disagree. Passing a B-H curve (see magnetization.py) switches to the
+saturating circuit instead: B is nonlinear in i there, so there is no closed
+form, and the current is found by bracketing and solving numerically against
+magnetics.magnetic_force_closing. There are no empirical constants beyond
+that curve: the force law, the spring law, and KVL are the whole content.
+Force margin is a *design choice* and is therefore always an explicit
+argument, never a default hiding a judgement call.
 
 Why this module exists separately from limits.py: limits.py answers "how good
 can this valve possibly be" (bounds, Pareto fronts). These functions answer
@@ -17,11 +21,16 @@ can this valve possibly be" (bounds, Pareto fronts). These functions answer
 share the inversion, so motion_threshold_current now delegates to
 pull_in_current rather than repeating the algebra.
 
-The B_sat caveat: this inversion is linear-magnetics only. Above B_sat the
-real core produces less force than the formula promises, so a solved current
-is optimistic there. Hold currents sit at the far end of that concern (the
-closed gap is cheap, the currents are milliamps), but a solved PEAK current
-should be checked with magnetics.saturation_check before it is trusted.
+The B_sat caveat: the linear form (`mag=None`) is optimistic above B_sat --
+the real core produces less force than the formula promises, so a current
+solved without `mag` is a lower bound on what the core actually needs, not
+an exact answer. This bites hardest at HOLD currents, not peak ones: the
+held-open gap is the CLOSED magnetic gap, which is exactly where the linear
+model most overstates force, so a hold current sized without `mag` buys less
+margin than it claims (see hold_current's docstring for the concrete case).
+A solved PEAK current should still be checked with
+magnetics.saturation_check; a solved HOLD current should be solved with
+`mag` supplied in the first place rather than checked after the fact.
 """
 import math
 
