@@ -25,63 +25,81 @@ should be checked with magnetics.saturation_check before it is trusted.
 """
 import math
 
+from scipy.optimize import brentq
+
 from solenoid_model import dynamics, magnetics
 
 
-def current_for_force_margin(gap, margin, params, F_resist):
-    """Coil current [A] whose magnetic force at `gap` is `margin` * `F_resist`.
+def current_for_force_margin(gap, margin, params, F_resist, mag=None):
+    """Coil current [A] whose force at `gap` is `margin` * `F_resist`.
 
-    The direct inversion of magnetics.magnetic_force_closing. `margin` is the
-    force safety factor (1.0 = bare balance, nothing to spare); `F_resist` is
-    the load being overcome, in newtons.
+    Linear mode inverts the force law directly. Saturating mode cannot:
+    B is nonlinear in i, so there is no closed form -- it brackets and
+    solves numerically instead. Force is monotonic in current in both
+    modes, so the root is unique.
     """
     if margin <= 0.0:
         raise ValueError(f"margin must be positive, got {margin}")
     if F_resist <= 0.0:
         raise ValueError(f"F_resist must be positive, got {F_resist}")
-    dL_dx = abs(magnetics.dinductance_dgap(gap, params))
-    return math.sqrt(2.0 * margin * F_resist / dL_dx)
+    F_target = margin * F_resist
+    if mag is None:
+        dL_dx = abs(magnetics.dinductance_dgap(gap, params))
+        return math.sqrt(2.0 * F_target / dL_dx)
+
+    def residual(i):
+        return magnetics.magnetic_force_closing(gap, i, params, mag) - F_target
+
+    # The linear solution is an underestimate of what a saturating core
+    # needs (saturation only removes force), so it is a safe lower
+    # bracket. Double upward until the force target is cleared; the
+    # B_sat ceiling means an unreachable target must terminate rather
+    # than loop, hence the explicit cap.
+    lo = math.sqrt(2.0 * F_target
+                   / abs(magnetics.dinductance_dgap(gap, params)))
+    hi = lo
+    for _ in range(60):
+        if residual(hi) > 0.0:
+            return brentq(residual, lo, hi, xtol=1e-12, rtol=1e-12)
+        hi *= 2.0
+    raise ValueError(
+        f"force {F_target:.3f} N at gap {gap:.2e} m is unreachable: the core "
+        f"saturates at B_sat={mag.B_sat} T before the coil can produce it")
 
 
-def hold_current(params, margin):
-    """Current [A] needed to hold the armature open at `margin` force margin.
+def hold_current(params, margin, mag=None):
+    """Current [A] needed to hold the armature open at `margin` margin.
 
-    The held-open position is x = x_stroke, so the gap is g0 - x_stroke (the
-    CLOSED magnetic gap -- the valve is open when the magnetic circuit is
-    shut) and the load is the spring at full compression plus static pressure.
+    The held-open position is x = x_stroke, so the gap is g0 - x_stroke
+    (the CLOSED magnetic gap -- the valve is open when the magnetic
+    circuit is shut) and the load is the spring at full compression plus
+    static pressure.
 
-    This is the cheap half of peak-and-hold: the same force that costs
-    pull_in_current at the rest gap costs a fraction of it here, because
-    |dL/dgap| grows sharply as the gap closes.
+    Saturation bites hardest exactly here. The closed gap is where the
+    linear model most overstates force, so a hold current solved without
+    `mag` buys less margin than it claims: on the N2_25BAR_PH case the
+    linear 11.44 mA delivers 1.60x, not the 2.0x it was sized for.
     """
     gap_open = params.g0 - params.x_stroke
     F_resist = (dynamics.spring_force(params.x_stroke, params)
                 + params.delta_P * params.A_seat)
-    return current_for_force_margin(gap_open, margin, params, F_resist)
+    return current_for_force_margin(gap_open, margin, params, F_resist, mag)
 
 
-def pull_in_current(params, margin):
-    """Current [A] needed to start the armature moving from rest, at `margin`.
-
-    Evaluated at the rest gap g0 against spring preload + static pressure.
-    At margin=1.0 this is exactly limits.motion_threshold_current -- the
-    current below which the valve cannot open however long you wait.
-    """
+def pull_in_current(params, margin, mag=None):
+    """Current [A] needed to start the armature moving from rest."""
     F_resist = (dynamics.spring_force(0.0, params)
                 + params.delta_P * params.A_seat)
-    return current_for_force_margin(params.g0, margin, params, F_resist)
+    return current_for_force_margin(params.g0, margin, params, F_resist, mag)
 
 
-def force_margin_at_current(params, i):
-    """Force margin (F_mag / F_resist) at the held-open position for current i.
-
-    The forward reading of hold_current: pass the current back in and get the
-    margin out. Below 1.0 the armature drops out.
-    """
+def force_margin_at_current(params, i, mag=None):
+    """Force margin (F_mag / F_resist) at the held-open position."""
     gap_open = params.g0 - params.x_stroke
     F_resist = (dynamics.spring_force(params.x_stroke, params)
                 + params.delta_P * params.A_seat)
-    return magnetics.magnetic_force_closing(gap_open, i, params) / F_resist
+    return magnetics.magnetic_force_closing(
+        gap_open, i, params, mag) / F_resist
 
 
 def max_ripple_fraction(margin):
