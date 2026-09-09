@@ -1,0 +1,6 @@
+# Streamlit Community Cloud 依這份檔案安裝套件。
+# 版本鎖定為本機驗證過可正常執行的組合。
+streamlit==1.59.2
+numpy==2.5.1
+scipy==1.18.0
+matplotlib==3.11.1

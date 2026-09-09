@@ -1,0 +1,9 @@
+[server]
+# 上傳檔案大小上限（MB）；本工具不需大檔上傳。
+maxUploadSize = 10
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"

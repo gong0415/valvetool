@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .DS_Store
 .venv/
+
+# 簡報原稿（不隨公開 repo 發佈）
+solenoid_model_manual.key
+solenoid_model_manual.pptx
