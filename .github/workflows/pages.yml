@@ -1,0 +1,51 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build the stlite page
+        run: python tools/build_site.py
+
+      # Pages does not follow symlinks, so copy the real files the page fetches.
+      - name: Stage app sources next to the page
+        run: |
+          mkdir -p site/solenoid_model site/docs
+          cp -R solenoid_model site/
+          cp -R docs site/
+          rm -rf site/solenoid_model/tests site/solenoid_model/__pycache__
+          find site -name '__pycache__' -type d -exec rm -rf {} + || true
+          touch site/.nojekyll
+
+      - name: Verify every file the page references exists
+        run: python tools/check_site.py
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

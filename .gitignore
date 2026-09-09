@@ -7,3 +7,6 @@ __pycache__/
 # 簡報原稿（不隨公開 repo 發佈）
 solenoid_model_manual.key
 solenoid_model_manual.pptx
+
+# GitHub Pages 建置產物（由 tools/build_site.py 產生）
+site/
