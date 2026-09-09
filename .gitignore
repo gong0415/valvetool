@@ -10,3 +10,10 @@ solenoid_model_manual.pptx
 
 # GitHub Pages 建置產物（由 tools/build_site.py 產生）
 site/
+
+# 編輯器／工具的本機設定（含個人路徑，不隨公開 repo 發佈）
+.claude/
+.vscode/
+
+# 測試（本機保留，不隨公開 repo 發佈）
+solenoid_model/tests/

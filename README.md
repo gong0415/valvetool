@@ -73,6 +73,19 @@ git push -u origin main
 
 ---
 
+## 這個 repo 不包含什麼
+
+為了讓公開的 repo 精簡，以下檔案保留在原作者本機、未上傳：
+
+- `solenoid_model/tests/` —— 319 項單元測試
+- `.claude/`、`.vscode/` —— 編輯器與工具的本機設定
+- `solenoid_model_manual.key/.pptx` —— 簡報原稿
+
+模型的驗證依據寫在 [ARCHITECTURE.md](ARCHITECTURE.md) 與
+`solenoid_model/report/MODEL_NOTES.md`。
+
+---
+
 ## 本機執行（開發用）
 
 ```bash
