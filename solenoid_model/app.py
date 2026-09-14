@@ -354,10 +354,17 @@ def render_layout_tab(params):
 
     st.markdown("**彈簧**")
     s = r["spring"]
+    L_installed = s.L_free - params.F_preload / params.k_spring
     st.write(f"線徑 {s.d_wire*1e3:.2f} mm / 中徑 {s.D_coil*1e3:.2f} mm / "
+             f"外徑 {(s.D_coil + s.d_wire)*1e3:.2f} mm / "
              f"有效圈數 {s.n_active:.2f} / 彈簧指數 {s.index:.2f} / "
-             f"最大剪應力 {s.tau_max/1e6:.0f} MPa / "
-             f"自由長 {s.L_free*1e3:.2f} mm")
+             f"最大剪應力 {s.tau_max/1e6:.0f} MPa")
+    st.caption(
+        f"自由長 {s.L_free*1e3:.2f} mm（未裝入）→ 閥關安裝長 "
+        f"{L_installed*1e3:.2f} mm（已被 F_preload 壓縮 "
+        f"{params.F_preload/params.k_spring*1e3:.2f} mm）→ 併圈長 "
+        f"{s.L_solid*1e3:.2f} mm。尺寸鏈的「彈簧腔」用自由長，是組裝時"
+        "須容得下的腔體尺寸，非裝配後長度。")
 
     if r["armature_rel_error"] > 0.05:
         st.warning(

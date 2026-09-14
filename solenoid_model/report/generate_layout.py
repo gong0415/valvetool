@@ -3,6 +3,8 @@
 剖面圖用真實 mm 比例（set_aspect("equal")），與 docs/spec/valve_schematic.png
 的符號示意圖不同——後者是參數對照用、不按比例。
 """
+import math
+from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib
@@ -29,141 +31,259 @@ _CJK_FONT_RC = {
     "axes.unicode_minus": False,
 }
 
-COIL_OD, COIL_ID, COIL_H = 18.0e-3, 6.0e-3, 12.0e-3
+# 外殼內徑：封裝外形輸入（envelope 的 coil_OD 參數沿用此名），不是繞線
+# 窗口本身。線圈斷面一律由 params.A_winding / params.l_turn_mean 推導，
+# 見 coil_box()，故此處不再宣告 COIL_ID / COIL_H 常數——先前版本的
+# 18/6/12 mm 與 params 數值一致純屬巧合（A_winding 恰為 72 mm^2），
+# 一旦 params 變動圖面便會無聲說謊。
+COIL_OD = 18.0e-3
 
 
 def _mm(x):
     return x * 1e3
 
 
-def generate_section(params=N2_25BAR_PH_PARAMS):
-    """按比例軸對稱半剖圖，單位 mm。"""
+@dataclass(frozen=True)
+class CoilBox:
+    """線圈繞線斷面（半剖，單位 m）。r_in/r_out 為半徑，y_lo/y_hi 為軸向。"""
+    r_in: float
+    r_out: float
+    y_lo: float
+    y_hi: float
+
+    @property
+    def width(self):
+        return self.r_out - self.r_in
+
+    @property
+    def height(self):
+        return self.y_hi - self.y_lo
+
+    @property
+    def area(self):
+        """繞線窗口面積 = 全寬 x 高（全寬 = 2 x 半剖寬度）。"""
+        return 2.0 * self.width * self.height
+
+
+def coil_box(params, y_win_lo, y_win_hi, t_sleeve, R_shell):
+    """由 params 推導線圈斷面，而非以常數硬寫。
+
+    內緣貼在隔離套外側（r_core + t_sleeve），中間不留不明空隙。軸向填滿
+    可用窗口（閥座頂面到彈簧腔底面）——線圈不能與座體或彈簧腔爭同一空間。
+    寬度再由 A_winding = 2*w*h 反解，故繞線面積與 ValveParams 恆等：
+    params 一變，圖面跟著變，不會像常數版（18/6/12 mm）在 A_winding
+    改動後無聲說謊。
+
+    先前版本改以 r_mean 定寬、置中於鐵芯跨距，結果線圈底緣侵入座體
+    0.787 mm——同一空間被兩個零件佔用。以窗口為準即無此衝突。
+    """
+    r_in = core_radius_with_sleeve(params, t_sleeve)
+    h = y_win_hi - y_win_lo
+    if h <= 0:
+        raise ValueError(f"線圈軸向窗口 {h * 1e3:.3f} mm 非正：軸向鏈不相容")
+    w = params.A_winding / (2.0 * h)
+    if r_in + w > R_shell:
+        raise ValueError(
+            f"繞線窗口 A_winding={params.A_winding * 1e6:.1f} mm² 在高 "
+            f"{h * 1e3:.2f} mm 下需寬 {w * 1e3:.2f} mm，外緣 "
+            f"{(r_in + w) * 1e3:.2f} mm 超出外殼內徑 {R_shell * 1e3:.2f} mm")
+    return CoilBox(r_in=r_in, r_out=r_in + w, y_lo=y_win_lo, y_hi=y_win_hi)
+
+
+def core_radius_with_sleeve(params, t_sleeve):
+    """線圈內緣半徑：鐵芯外加非磁性隔離套，中間不留不明空隙。"""
+    return layout.core_radius(params) + t_sleeve
+
+
+def spring_installed_length(params, spring):
+    """彈簧「安裝長」：閥關（銜鐵坐封）時的實際長度 [m]。
+
+    spring.L_free 是自由長——未裝入時的長度。裝配後彈簧永遠至少被預載
+    壓縮 F_preload/k_spring，閥關時即為此狀態；閥全開再多壓 x_stroke。
+    axial_stack 的「彈簧腔」用 L_free 是腔體尺寸（組裝時須容得下），
+    但剖面圖畫的是已裝配狀態，兩者不同，故此處另算不動 layout.py。
+    """
+    return spring.L_free - params.F_preload / params.k_spring
+
+
+def axial_parts(params, t_seat, t_pole, t_plate, spring):
+    """軸向零件鏈 [(name, y_lo, y_hi)]，座面朝上，含兩片端板。
+
+    順序與厚度對齊 layout.axial_stack 的 segments（端板 x2），因此圖面
+    總長恆等於 envelope()['L']；先前版本漏畫座端端板，標註 18.679 mm
+    卻只畫到 17.417 mm。
+    """
+    parts, y = [], 0.0
+    for name, t in (("端板（座端）", t_plate),
+                    ("閥座座體", t_seat),
+                    ("行程", params.x_stroke),
+                    ("銜鐵", layout.armature_thickness(params)),
+                    ("工作氣隙", params.g0),
+                    ("固定極", t_pole),
+                    ("彈簧腔", spring.L_free),
+                    ("端板（彈簧端）", t_plate)):
+        parts.append((name, y, y + t))
+        y += t
+    return parts
+
+
+def section_geometry(params=N2_25BAR_PH_PARAMS):
+    """剖面圖的全部幾何 [m]，與繪圖共用同一組數字。
+
+    抽成獨立函式讓測試能直接斷言幾何（總長是否等於 envelope L、線圈
+    面積是否等於 A_winding、零件是否互相穿插），而不是只驗 PNG 檔案
+    大小——舊測試僅斷言 st_size > 1000，六個幾何錯誤因此全數無聲通過。
+    """
     env = layout.envelope(params, coil_OD=COIL_OD)
-    wall = env["wall"].adopted
-    r_core = layout.core_radius(params)
-    t_arm = layout.armature_thickness(params)
+    spring = layout.spring_geometry(params, **layout.SPRING_DESIGN)
     t_plate = layout.end_plate_thickness(params)
     t_pole = layout.LAYOUT_EMPIRICAL["t_fixed_pole"]["value"]
     t_seat = layout.LAYOUT_EMPIRICAL["t_seat_body"]["value"]
     t_sleeve = layout.LAYOUT_EMPIRICAL["t_sleeve"]["value"]
-    R_shell = COIL_OD / 2
+    parts = axial_parts(params, t_seat, t_pole, t_plate, spring)
+    span = dict((n, (lo, hi)) for n, lo, hi in parts)
+    # 線圈軸向窗口：閥座頂面到彈簧腔底面，兩端都是實體零件的界面，
+    # 線圈不得侵入（以鐵芯跨距置中會壓進座體 0.787 mm）。
+    coil = coil_box(params, span["閥座座體"][1], span["彈簧腔"][0],
+                    t_sleeve, COIL_OD / 2.0)
+    return {
+        "env": env, "spring": spring, "parts": parts, "span": span,
+        "coil": coil, "t_sleeve": t_sleeve, "t_plate": t_plate,
+        "R_shell": COIL_OD / 2.0, "wall": env["wall"].adopted,
+        "r_core": layout.core_radius(params),
+        "L_total": parts[-1][2],
+        "spring_installed": spring_installed_length(params, spring),
+        "r_spring_out": (spring.D_coil + spring.d_wire) / 2.0,
+    }
+
+
+def generate_section(params=N2_25BAR_PH_PARAMS):
+    """按比例軸對稱半剖圖，單位 mm。"""
+    G = section_geometry(params)
+    env, spring, span, coil = G["env"], G["spring"], G["span"], G["coil"]
+    wall, R_shell, r_core = G["wall"], G["R_shell"], G["r_core"]
+    L_total = G["L_total"]
 
     with matplotlib.rc_context(_CJK_FONT_RC):
         fig, ax = plt.subplots(figsize=(8, 10))
         # 淨空標註用的引線終點：避開外殼標籤（位於 R_shell+wall+0.6），
         # 拉遠到 R_shell+wall+2.4 之外的空白區
         x_lead = _mm(R_shell + wall) + 2.4
-        y = 0.0
-        # 閥座座體（先畫實體，流道孔再疊在上面「挖空」，避免孔看起來像脫離的碎片）
-        ax.add_patch(Rectangle((0, _mm(y)), _mm(R_shell + wall),
-                               _mm(t_seat), fc=COL_NONMAG, ec="k"))
-        ax.text(_mm(R_shell) * 0.7, _mm(y + t_seat / 2), "閥座座體",
-                ha="center", va="center", fontsize=8)
-        # 流道孔：白色填色挖空座體，僅在孔口（頂邊）與孔壁（右邊）畫線，
-        # 底邊與軸心邊不畫線，讀作貫穿座體的孔而非獨立色塊
+        R_out = R_shell + wall
+
+        def yl(name):
+            return span[name][0]
+
+        def yh(name):
+            return span[name][1]
+
+        # --- 端板 x2：axial_stack 明寫「端板 x2」，座端與彈簧端各一片。
+        for name in ("端板（座端）", "端板（彈簧端）"):
+            ax.add_patch(Rectangle((0, _mm(yl(name))), _mm(R_out),
+                                   _mm(yh(name) - yl(name)),
+                                   fc=COL_MAG, ec="k"))
+        # --- 閥座座體（先畫實體，流道孔再疊上「挖空」）
+        ax.add_patch(Rectangle((0, _mm(yl("閥座座體"))), _mm(R_out),
+                               _mm(yh("閥座座體") - yl("閥座座體")),
+                               fc=COL_NONMAG, ec="k"))
+        ax.text(_mm(R_shell) * 0.7, _mm(sum(span["閥座座體"]) / 2),
+                "閥座座體", ha="center", va="center", fontsize=8)
+        # 流道孔：白色填色挖空座體，僅畫孔口與孔壁，讀作貫穿孔而非色塊。
+        # 孔自座端端板底面一路貫穿到閥座頂面（流體入口）。
         r_bore = _mm(params.D_seat_bore / 2)
-        ax.add_patch(Rectangle((0, _mm(y)), r_bore, _mm(t_seat),
+        y_bore_lo, y_bore_hi = 0.0, yh("閥座座體")
+        ax.add_patch(Rectangle((0, _mm(y_bore_lo)), r_bore,
+                               _mm(y_bore_hi - y_bore_lo),
                                fc="w", ec="none", zorder=2))
-        ax.plot([0, r_bore, r_bore], [_mm(y), _mm(y), _mm(y + t_seat)],
+        ax.plot([0, r_bore, r_bore],
+                [_mm(y_bore_lo), _mm(y_bore_lo), _mm(y_bore_hi)],
                 color=COL_SEAL, lw=1.5, zorder=3)
-        # 標籤文字固定在座體中段高度（y=t_seat/2），落在 x_lead 右側淨空
-        # 帶內、x 軸刻度標籤上方，不落到座標軸下緣以外與刻度文字重疊。
-        # 直接以純水平線連接（xy/xytext 同一 y），改用 ax.plot 而非
-        # annotate 的 "angle" connectionstyle，避免其在零垂直分量下
-        # 除以零產生 RuntimeWarning
-        y_bore_label = _mm(y + t_seat / 2)
+        y_bore_label = _mm((y_bore_lo + y_bore_hi) / 2)
         ax.plot([r_bore, x_lead], [y_bore_label, y_bore_label],
                 color=COL_SEAL, lw=0.9)
         ax.text(x_lead, y_bore_label,
                 f" 流道孔徑 D_seat_bore = {_mm(params.D_seat_bore):.2f} mm",
                 fontsize=7.5, color=COL_SEAL, ha="left", va="center")
-        y += t_seat
-        y_stroke_lo, y_stroke_hi = y, y + params.x_stroke
-        y += params.x_stroke      # 行程（閥開時的間隙）
-        # 銜鐵
-        ax.add_patch(Rectangle((0, _mm(y)), _mm(r_core), _mm(t_arm),
-                               fc=COL_MAG, ec="k"))
-        ax.text(_mm(r_core) / 2, _mm(y + t_arm / 2), "銜鐵",
-                ha="center", va="center", fontsize=8, color="w")
-        y += t_arm
-        y_gap_lo, y_gap_hi = y, y + params.g0
-        y += params.g0            # 工作氣隙
-        # 固定極
-        ax.add_patch(Rectangle((0, _mm(y)), _mm(r_core), _mm(t_pole),
-                               fc=COL_MAG, ec="k"))
-        ax.text(_mm(r_core) / 2, _mm(y + t_pole / 2), "固定極",
-                ha="center", va="center", fontsize=8, color="w")
-        # 行程與工作氣隙：次毫米級間隙，用引線標到右側淨空帶。兩個間隙的
-        # y 範圍都落在線圈徑向涵蓋之內（線圈 r=3.0-9.0mm），若引線直接
-        # 水平拉到 x_lead 會整條穿過線圈色塊與「線圈 4000 匝」文字，看起
-        # 來像是線圈的一部分。改成在間隙本體的淨空半徑帶（r_core 與線圈
-        # 內緣 COIL_ID/2 之間，此帶內僅有薄薄的隔離套，仍留有可見空隙）
-        # 先水平拉一小段，再垂直折到線圈外緣正上／正下方的淨空 y，最後
-        # 水平拉到標籤：三段都不與線圈本體重疊。
-        # 垂直段刻意離開 r_core 一點（不緊貼銜鐵/固定極的黑色描邊），
-        # 避免細線被同一 x 上的元件邊框線蓋掉而不可見。
-        # （y_coil 提前算出：線圈實際繪製於本函式稍後，但幾何在此已確定）
-        y_coil = y - COIL_H / 2
-        y_coil_top = _mm(y_coil + COIL_H)
-        y_coil_bot = _mm(y_coil)
-        y_stroke_mid = _mm((y_stroke_lo + y_stroke_hi) / 2)
-        y_gap_mid = _mm((y_gap_lo + y_gap_hi) / 2)
-        y_stroke_lead = y_coil_bot - 0.6
-        y_gap_lead = y_coil_top + 0.6
-        r_stub = _mm(r_core) + 0.35  # 離開元件描邊，落在隔離套內緣之前的淨空帶
-        ax.plot([_mm(r_core), r_stub, r_stub, x_lead],
-                [y_stroke_mid, y_stroke_mid, y_stroke_lead, y_stroke_lead],
-                color=COL_MECH, lw=1.0, solid_capstyle="butt")
-        ax.text(x_lead, y_stroke_lead,
-                f" 行程 x_stroke = {_mm(y_stroke_hi - y_stroke_lo):.2f} mm",
-                fontsize=8, color=COL_MECH, ha="left", va="center")
-        ax.plot([_mm(r_core), r_stub, r_stub, x_lead],
-                [y_gap_mid, y_gap_mid, y_gap_lead, y_gap_lead],
-                color=COL_MAG, lw=1.0, solid_capstyle="butt")
-        ax.text(x_lead, y_gap_lead,
-                f" 工作氣隙 g0 = {_mm(y_gap_hi - y_gap_lo):.2f} mm",
-                fontsize=9, color=COL_MAG, ha="left", va="center")
-        # 線圈（在固定極與銜鐵徑向外側；y_coil 已於上方引線區塊算出）
-        ax.add_patch(Rectangle((_mm(COIL_ID / 2), _mm(y_coil)),
-                               _mm((COIL_OD - COIL_ID) / 2), _mm(COIL_H),
+        # --- 銜鐵、固定極
+        for name, label in (("銜鐵", "銜鐵"), ("固定極", "固定極")):
+            ax.add_patch(Rectangle((0, _mm(yl(name))), _mm(r_core),
+                                   _mm(yh(name) - yl(name)),
+                                   fc=COL_MAG, ec="k"))
+            ax.text(_mm(r_core) / 2, _mm(sum(span[name]) / 2), label,
+                    ha="center", va="center", fontsize=8, color="w")
+        # --- 行程與工作氣隙：次毫米間隙，引線繞過線圈拉到右側淨空帶。
+        # 垂直段走在鐵芯外緣與線圈內緣之間的隔離套帶，不穿過線圈色塊。
+        y_coil_top, y_coil_bot = _mm(coil.y_hi), _mm(coil.y_lo)
+        r_stub = _mm(r_core) + 0.12
+        # 兩條引線都折到線圈上方的淨空並上下錯開，不再往線圈下方走——
+        # 那裡是座體與其標籤，舊版的行程引線會橫穿「閥座座體」文字。
+        for name, color, size, fmt in (
+                ("行程", COL_MECH, 8, "行程 x_stroke = {:.2f} mm"),
+                ("工作氣隙", COL_MAG, 9, "工作氣隙 g0 = {:.2f} mm")):
+            lo, hi = span[name]
+            y_mid = _mm((lo + hi) / 2)
+            y_end = (y_coil_top + 0.6 if name == "工作氣隙"
+                     else y_coil_top + 2.2)
+            ax.plot([_mm(r_core), r_stub, r_stub, x_lead],
+                    [y_mid, y_mid, y_end, y_end],
+                    color=color, lw=1.0, solid_capstyle="butt")
+            ax.text(x_lead, y_end, " " + fmt.format(_mm(hi - lo)),
+                    fontsize=size, color=color, ha="left", va="center")
+        # --- 線圈：斷面由 params.A_winding / l_turn_mean 推導（見 coil_box），
+        # 內緣貼隔離套外側，不留不明空隙。高度大於鐵芯跨距時對稱溢出，
+        # 屬真實幾何，另加註說明而非隱藏。
+        ax.add_patch(Rectangle((_mm(coil.r_in), _mm(coil.y_lo)),
+                               _mm(coil.width), _mm(coil.height),
                                fc=COL_COIL, ec="k"))
-        ax.text(_mm((COIL_OD + COIL_ID) / 4), _mm(y_coil + COIL_H / 2),
-                f"線圈\n{params.N_turns:.0f} 匝", ha="center", va="center",
-                fontsize=8)
-        # 隔離套
-        ax.add_patch(Rectangle((_mm(COIL_ID / 2 - t_sleeve), _mm(y_coil)),
-                               _mm(t_sleeve), _mm(COIL_H),
+        ax.text(_mm((coil.r_in + coil.r_out) / 2),
+                _mm((coil.y_lo + coil.y_hi) / 2),
+                f"線圈\n{params.N_turns:.0f} 匝\n"
+                f"{coil.area * 1e6:.1f} mm²",
+                ha="center", va="center", fontsize=8)
+        # --- 隔離套：沿線圈內緣，貼在鐵芯外側
+        ax.add_patch(Rectangle((_mm(coil.r_in - G["t_sleeve"]),
+                                _mm(coil.y_lo)), _mm(G["t_sleeve"]),
+                               _mm(coil.height),
                                fc="none", ec=COL_SEAL, lw=1.5, hatch="//"))
-        y += t_pole
-        # 彈簧腔 + 端板
-        spring = layout.spring_geometry(params, **layout.SPRING_DESIGN)
-        ax.add_patch(Rectangle((0, _mm(y)), _mm(r_core), _mm(spring.L_free),
+        # --- 彈簧：真實外徑 D_coil + d_wire（舊版誤畫到 r_core，寬 2.35 倍），
+        # 長度用安裝長（閥關時已被預載壓縮），非自由長。
+        r_spr = G["r_spring_out"]
+        L_inst = G["spring_installed"]
+        y_spr = yl("彈簧腔")
+        ax.add_patch(Rectangle((0, _mm(y_spr)), _mm(r_spr), _mm(L_inst),
                                fc="none", ec=COL_MECH, lw=1.5, ls="--"))
-        ax.text(_mm(r_core) / 2, _mm(y + spring.L_free / 2),
-                f"彈簧\nd{_mm(spring.d_wire):.2f}", ha="center", va="center",
-                fontsize=7, color=COL_MECH)
-        y += spring.L_free
-        ax.add_patch(Rectangle((0, _mm(y)), _mm(R_shell + wall),
-                               _mm(t_plate), fc=COL_MAG, ec="k"))
-        y += t_plate
-        # 外殼
-        ax.add_patch(Rectangle((_mm(R_shell), 0), _mm(wall), _mm(y),
+        # 標籤置於彈簧正上方的腔內淨空（安裝長之上到腔頂），純垂直讓位，
+        # 不往右伸：往右會與線圈左上角及右側的行程引線打結。
+        ax.text(_mm(r_spr) + 0.3, _mm(yh("彈簧腔")) - 0.2,
+                f"彈簧 d{_mm(spring.d_wire):.2f} / D{_mm(spring.D_coil):.2f}\n"
+                f"安裝長 {_mm(L_inst):.2f} mm"
+                f"（自由長 {_mm(spring.L_free):.2f}）",
+                ha="left", va="top", fontsize=6.5, color=COL_MECH)
+        # --- 外殼
+        ax.add_patch(Rectangle((_mm(R_shell), 0), _mm(wall), _mm(L_total),
                                fc=COL_MAG, ec="k"))
-        ax.text(_mm(R_shell + wall) + 0.6, _mm(y) / 2,
+        ax.text(_mm(R_out) + 0.6, _mm(L_total) / 2,
                 f"外殼 {_mm(wall):.2f} mm", fontsize=8, color=COL_MAG,
                 rotation=90, va="center")
-        # 中心線
+        # --- 中心線
         ax.axvline(0, color="k", lw=0.8, ls="-.")
-        ax.text(0.1, _mm(y) + 0.6, "軸心", fontsize=7)
-        # 總尺寸標註
-        ax.add_patch(FancyArrowPatch((-1.2, 0), (-1.2, _mm(y)),
+        ax.text(0.1, _mm(L_total) + 0.6, "軸心", fontsize=7)
+        # --- 總尺寸標註：畫到 L_total，且 L_total 恆等於 envelope()['L']
+        ax.add_patch(FancyArrowPatch((-1.2, 0), (-1.2, _mm(L_total)),
                                      arrowstyle="<->", mutation_scale=12,
                                      color=COL_MECH))
-        ax.text(-1.6, _mm(y) / 2, f"總長 {_mm(env['L']):.2f} mm",
+        ax.text(-1.6, _mm(L_total) / 2, f"總長 {_mm(env['L']):.2f} mm",
                 rotation=90, ha="center", va="center", fontsize=9,
                 color=COL_MECH)
-        ax.set_xlim(-3, _mm(R_shell + wall) + 10)
-        ax.set_ylim(-1.5, _mm(y) + 2)
+        # 線圈斷面來源註記：讓讀者知道這個框不是畫好看的，是 A_winding 反解。
+        # 放在線圈中段右側的大片淨空，避開下方 D_seat_bore 標籤所在的 y。
+        ax.text(x_lead, _mm((coil.y_lo + coil.y_hi) / 2) - 2.0,
+                f" 線圈斷面由 A_winding = {params.A_winding * 1e6:.1f} mm²\n"
+                f" 與軸向窗口高 {_mm(coil.height):.2f} mm\n"
+                f" 反解寬 {_mm(coil.width):.2f} mm",
+                fontsize=6.5, color=COL_COIL, ha="left", va="top")
+        ax.set_xlim(-3, _mm(R_out) + 11)
+        ax.set_ylim(-1.5, _mm(L_total) + 2)
         ax.set_aspect("equal")
         ax.set_xlabel("半徑 (mm)")
         ax.set_ylabel("軸向 (mm)")
