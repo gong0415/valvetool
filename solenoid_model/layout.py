@@ -45,6 +45,28 @@ LAYOUT_EMPIRICAL = {
         "value": 0.1e-3, "unit": "m", "source": "EMPIRICAL",
         "reason": "彈簧全壓縮時與腔壁的餘隙，避免併圈干涉",
     },
+    # 以下三項描述「銜鐵—導杆—閥芯」這個動件組，即 valve_schematic.png
+    # 的拓樸：銜鐵在極面下方被向上吸，經導杆把運動傳到下方的閥芯，彈簧
+    # 套在導杆上把閥芯壓回閥座。動力學只需要 m_arm 與 A_seat，故模型從未
+    # 給定這三個尺寸；但少了它們就畫不出彈簧的力路（力路缺失時，彈簧會
+    # 被畫成夾在兩個不動面之間，卻仍隨行程改變長度——物理上不可能）。
+    "d_stem": {
+        "value": 1.2e-3, "unit": "m", "source": "EMPIRICAL",
+        "reason": "導杆直徑。需承受 F_preload + k*x_stroke ≈ 2.8 N 的壓桿"
+                  "載荷並供彈簧套入（彈簧內徑 D_coil - d_wire = 1.45 mm），"
+                  "故取 1.2 mm 留 0.25 mm 徑向餘隙。動力學未用到此值",
+    },
+    "d_poppet": {
+        "value": 1.6e-3, "unit": "m", "source": "EMPIRICAL",
+        "reason": "閥芯直徑。須大於流道孔 0.60 mm 才能密封，並容納 "
+                  "w_land=0.05 mm 的密封 land 與 R_tip=1.0 mm 的球面；"
+                  "取 1.6 mm。A_seat 已由 params 給定，此值僅供繪圖",
+    },
+    "t_poppet": {
+        "value": 0.8e-3, "unit": "m", "source": "EMPIRICAL",
+        "reason": "閥芯厚度。承受 25 bar 壓差與坐封衝擊的最小厚度判斷；"
+                  "本模型未解閥芯應力，故為封裝經驗值",
+    },
 }
 
 # The spring design point solved in spec section 6: d=0.35 mm on a 1.8 mm
@@ -257,6 +279,18 @@ def axial_stack(params, t_seat_body=None, t_fixed_pole=None,
     Returns {"segments": [(name, thickness), ...], "total": float}. Ordered
     so the list reads as the physical stack, not as a dict of parts.
 
+    Order follows valve_schematic.png: seat at the bottom, then the poppet's
+    travel, the spring, the armature, the working gap, and the fixed pole
+    with the coil at the top. The spring sits BELOW the armature and above
+    the poppet because dynamics.spring_force is F_preload + k*x with x
+    measured upward (the pull-in direction) and enters net_mechanical_force
+    negatively: the spring force points down and grows as the armature
+    rises, so the spring must be compressed by the moving assembly against
+    a fixed seat above it. Placing the spring after the fixed pole -- as
+    this chain did until the actuation figure exposed it -- puts it between
+    two stationary faces, where it can neither change length nor reach the
+    armature through 4 mm of solid pole.
+
     Spring parameters default to SPRING_DESIGN, the single verified design
     point (spec section 6) that the figure generator and GUI also draw
     from -- so the dimension chain here and the section drawing it feeds
@@ -276,10 +310,10 @@ def axial_stack(params, t_seat_body=None, t_fixed_pole=None,
     segments = [
         ("閥座座體", t_seat_body),
         ("行程 x_stroke", params.x_stroke),
+        ("彈簧腔", spring.L_free),
         ("銜鐵", armature_thickness(params, rho)),
         ("工作氣隙 g0", params.g0),
         ("固定極", t_fixed_pole),
-        ("彈簧腔", spring.L_free),
         ("端板 x2", 2.0 * end_plate_thickness(params)),
     ]
     return {"segments": segments, "total": sum(t for _, t in segments)}
