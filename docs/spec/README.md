@@ -13,7 +13,7 @@
 | `seal_land_schematic.png` | 密封 land 放大示意圖（`w_land`／`R_tip`／`A_seat`） |
 | `layout_section.png` | 實體佈局剖面圖（P8,按真實 mm 比例） |
 | `layout_actuation.png` | 作動前後對照圖（閥關 x=0 ↔ 閥開 x=x_stroke,含氣隙放大） |
-| `layout_architecture.png` | 四物理域架構圖與跨域耦合點 |
+| `layout_architecture.png` | 四物理域架構圖與跨域耦合點（方塊數字由 params 推導,流量為 `fluid.mdot_gas` 實算） |
 
 上列前三張示意圖由 `solenoid_model/report/generate_schematic.py` 產生,
 後三張 P8 佈局圖由 `solenoid_model/report/generate_layout.py` 產生,皆不手工編輯。

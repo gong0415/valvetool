@@ -20,6 +20,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import FancyArrowPatch, Rectangle
 
+from solenoid_model import fluid as fluid_lib
 from solenoid_model import layout
 from solenoid_model.cases import N2_25BAR_PH_PARAMS
 
@@ -581,8 +582,25 @@ def generate_actuation(params=N2_25BAR_PH_PARAMS):
     return ACTUATION_OUT
 
 
-def generate_architecture():
-    """四個功能域方塊與跨域耦合點。"""
+def generate_architecture(params=N2_25BAR_PH_PARAMS, V_bus=28.0,
+                          cond=None, mdot_req=1.28e-3):
+    """四個功能域方塊與跨域耦合點。
+
+    方塊上的數字由 params 推導，不寫死字面值。流量同時標出「需求」與
+    「模型實算」：1.28 g/s 是使用者給定的需求（cases.py 的孔徑就是由它
+    反推，案例名稱即 "N₂ 25bar 1.28g/s"），1.302 g/s 是 fluid.mdot_gas
+    在該案例宣告條件下的實現值（101.7% of target）。只標其中一個會讓
+    讀者分不清哪個是規格、哪個是結果。
+
+    cond 預設取 N2_25BAR 案例的宣告條件（P_up=25 bar, P_down=0 真空,
+    T0=298.15 K）——不可自行假設 26→1 bar / 293 K，那會給 1.37 g/s 並
+    與 cases.py 的 1.302 g/s 對不上。V_bus 為參數，因匯流排電壓屬於
+    circuit 而非 ValveParams。
+    """
+    if cond is None:
+        from solenoid_model.cases import N2_25BAR
+        cond = N2_25BAR.cond
+    mdot = fluid_lib.mdot_gas(params.x_stroke, params, fluid_lib.N2, cond)
     with matplotlib.rc_context(_CJK_FONT_RC):
         fig, ax = plt.subplots(figsize=(10, 7))
 
@@ -606,13 +624,14 @@ def generate_architecture():
                                          lw=1.6))
 
         box(0.3, 7.2, 9.4, 1.6, "電氣域", COL_COIL)
-        node(0.8, 7.5, "28 V 母線"); node(3.4, 7.5, "峰值-保持驅動")
-        node(6.6, 7.5, "線圈 4000 匝")
+        node(0.8, 7.5, f"{V_bus:.0f} V 母線")
+        node(3.4, 7.5, "峰值-保持驅動")
+        node(6.6, 7.5, f"線圈 {params.N_turns:.0f} 匝")
         arrow((2.8, 7.85), (3.4, 7.85)); arrow((5.4, 7.85), (6.6, 7.85))
 
         box(0.3, 4.6, 9.4, 2.2, "磁域", COL_MAG)
         node(0.8, 5.6, "MMF = N·i"); node(3.4, 5.6, "鐵芯 B-H\n（飽和）")
-        node(6.6, 5.6, "工作氣隙 g0")
+        node(6.6, 5.6, f"工作氣隙 g0 = {_mm(params.g0):.2f} mm")
         node(3.4, 4.75, "磁軛回路\nA≥A_gap")
         arrow((1.8, 5.6), (1.8, 5.05)); arrow((2.8, 5.95), (3.4, 5.95))
         arrow((5.4, 5.95), (6.6, 5.95))
@@ -624,14 +643,18 @@ def generate_architecture():
         # 方塊互相貼邊；第二排節點（閥座止擋／壅塞流）與第一排之間也留
         # 0.25 間隙，不與其上緣重疊
         box(0.3, 1.7, 4.6, 2.9, "機械域", COL_MECH)
-        node(0.55, 3.15, "銜鐵 0.8 g", w=1.85)
-        node(2.7, 3.15, "彈簧 4000 N/m", w=1.85)
-        node(1.6, 2.2, "閥座止擋", w=1.85)
+        node(0.55, 3.15, f"銜鐵 {params.m_arm * 1e3:.1f} g", w=1.85)
+        node(2.7, 3.15, f"彈簧 {params.k_spring:.0f} N/m", w=1.85)
+        node(1.6, 2.2, f"閥芯坐封 ⌀{_mm(params.D_seat_bore):.2f}", w=1.85)
 
         box(5.1, 1.7, 4.6, 2.9, "流體域", COL_SEAL)
-        node(5.35, 3.15, "N₂ 25 bar", w=1.85)
-        node(7.5, 3.15, "孔徑 0.60 mm", w=1.85)
-        node(6.4, 2.2, "1.28 g/s 壅塞流", w=1.85)
+        node(5.35, 3.15, f"N₂ {params.delta_P / 1e5:.0f} bar", w=1.85)
+        node(7.5, 3.15, f"孔徑 {_mm(params.D_seat_bore):.2f} mm", w=1.85)
+        # 需求 vs 實算：兩者都標，讀者才分得清規格與結果
+        node(6.15, 2.2,
+             f"壅塞流 {mdot * 1e3:.2f} g/s\n"
+             f"（需求 {mdot_req * 1e3:.2f}，"
+             f"{mdot / mdot_req * 100:.1f}%）", w=2.3)
 
         # 跨域耦合點
         arrow((7.6, 5.6), (7.6, 4.3), color=COL_MAG)
@@ -640,14 +663,18 @@ def generate_architecture():
         # 連接，不再貫穿機械域／流體域方塊內部；箭頭、標籤、下方註腳三者
         # 之間各留 >=0.3 的垂直間距，避免彼此貼在一起
         arrow((2.6, 1.4), (5.4, 1.4), color=COL_SEAL, style="<->")
-        ax.text(4.0, 1.1, "耦合②　閥座：機械↔流體", ha="center",
+        ax.text(4.0, 1.52, "耦合②　閥座：機械↔流體", ha="center",
                 fontsize=8, color=COL_SEAL)
 
-        ax.text(5.0, 0.35,
+        ax.text(5.0, 0.05,
                 "耦合①：氣隙同時決定磁阻與機械位置（dynamics.coupled_rhs）\n"
-                "耦合②：閥座開度決定流量，噴流反作用力回饋進力平衡",
+                "耦合②：閥座開度決定流量，噴流反作用力回饋進力平衡\n"
+                f"流量：需求 {mdot_req * 1e3:.2f} g/s（孔徑由此反推），"
+                f"fluid.mdot_gas 在全開 x={_mm(params.x_stroke):.2f} mm、"
+                f"{cond.P_up / 1e5:.0f}→{cond.P_down / 1e5:.0f} bar、"
+                f"{cond.T0:.1f} K 下實現 {mdot * 1e3:.3f} g/s",
                 ha="center", fontsize=8.5)
-        ax.set_xlim(0, 10); ax.set_ylim(-0.5, 9.2)
+        ax.set_xlim(0, 10); ax.set_ylim(-1.1, 9.2)
         ax.axis("off")
         ax.set_title("電磁閥架構圖：四個物理域與跨域耦合點", fontsize=12)
         ARCH_OUT.parent.mkdir(parents=True, exist_ok=True)
