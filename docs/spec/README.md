@@ -12,7 +12,7 @@
 | `winding_window_schematic.png` | 繞線窗口示意圖（`A_winding`／`k_fill`／`l_turn_mean`） |
 | `seal_land_schematic.png` | 密封 land 放大示意圖（`w_land`／`R_tip`／`A_seat`） |
 | `layout_section.png` | 實體佈局剖面圖（P8,按真實 mm 比例） |
-| `layout_actuation.png` | 作動前後對照圖（閥關 x=0 ↔ 閥開 x=x_stroke,含氣隙放大） |
+| `layout_actuation.png` | 作動前後對照圖（閥關 x=0 ↔ 閥開 x=x_stroke,含間隙放大與流體路徑） |
 | `layout_architecture.png` | 四物理域架構圖與跨域耦合點（方塊數字由 params 推導,流量為 `fluid.mdot_gas` 實算） |
 
 上列前三張示意圖由 `solenoid_model/report/generate_schematic.py` 產生,
@@ -38,6 +38,18 @@
 `d_stem`／`d_poppet`／`t_poppet` 是 `LAYOUT_EMPIRICAL` 的封裝判斷（動力學
 只需要 `m_arm` 與 `A_seat`,從未給定這三個尺寸）,但少了它們就畫不出彈簧的
 力路。
+
+### 流體路徑（作動圖）
+
+氣體沿 0.60 mm 孔上行,在閥芯端面與座面之間的**簾幕**（環狀縫隙）轉為徑向
+流出。節流面是簾幕 `π·D·x`,不是孔本身——`fluid.effective_area` 取
+`min(π·D·x, π·D²/4)`。兩者在 `x = D/4` 相等,而本案 `x_stroke` 恰為
+0.15 mm = D/4,所以全開時簾幕剛好追上孔面積 0.283 mm²,**再多行程也買不到
+流量**（`cases.py` sizing chain 第 2 步）。下游真空使壓比遠低於
+`r_crit(N₂)=0.528`,恆為壅塞流 1.302 g/s。
+
+閥關時圖上不畫流線（流量為零）,改標 25 bar 壓在已坐封閥芯上的 0.71 N——
+該力與彈簧同向,是失效關閉的一部分。
 
 ## 修改規格書
 

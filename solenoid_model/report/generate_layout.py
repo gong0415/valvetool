@@ -367,6 +367,86 @@ def generate_section(params=N2_25BAR_PH_PARAMS):
     return SECTION_OUT
 
 
+def flow_state(params, x, gas=None, cond=None):
+    """流體狀態 [SI]：有效流通面積、質量流率與瓶頸所在。
+
+    effective_area 是「簾幕」模型 min(pi*D*x, pi*D^2/4)：氣體沿孔上行，
+    在閥芯端面與座面之間的環狀縫隙轉為徑向流出，故節流面是這道簾幕而
+    非孔本身——直到行程大到簾幕面積追上孔面積為止。臨界點 x = D/4，
+    而本案 x_stroke 恰等於 D/4（cases.py sizing chain 第 2 步：再多行程
+    也買不到流量），這是圖上值得畫出來的機制。
+    """
+    if gas is None:
+        gas = fluid_lib.N2
+    if cond is None:
+        from solenoid_model.cases import N2_25BAR
+        cond = N2_25BAR.cond
+    a_curtain = math.pi * params.D_seat_bore * max(x, 0.0)
+    a_bore = math.pi * params.D_seat_bore ** 2 / 4.0
+    A_eff = fluid_lib.effective_area(x, params)
+    r = cond.P_down / cond.P_up if cond.P_up > 0 else 0.0
+    return {
+        "A_eff": A_eff, "a_curtain": a_curtain, "a_bore": a_bore,
+        "mdot": fluid_lib.mdot_gas(x, params, gas, cond),
+        "choked": r < fluid_lib.critical_pressure_ratio(gas),
+        "limiter": "簾幕" if a_curtain < a_bore else "孔口",
+        "cond": cond, "open": x > 0.0,
+    }
+
+
+def _draw_flow(ax, params, x, G, S, scale=1.0):
+    """在半剖圖上畫流體路徑：孔內上行 → 簾幕徑向轉折 → 徑向流出。
+
+    閥關時不畫流線（沒有流動），改以壓力箭頭表示 25 bar 壓在已坐封的
+    閥芯上——那是坐封狀態下流體唯一的作用，也是失效關閉的一部分。
+    """
+    F = flow_state(params, x)
+    r_bore = _mm(params.D_seat_bore / 2)
+    r_pop = _mm(layout.LAYOUT_EMPIRICAL["d_poppet"]["value"] / 2)
+    y_seat = _mm(S["y_seat_top"])
+    y_in = _mm(0.0)
+
+    if not F["open"]:
+        # 坐封：壓力箭頭在孔內頂到閥芯底面，無流線。孔半徑僅 0.30 mm，
+        # 故箭頭置於孔中線、標籤一律拉到孔外。
+        ax.annotate("", xy=(r_bore * 0.5, y_seat - 0.10),
+                    xytext=(r_bore * 0.5, y_in + 0.35),
+                    arrowprops=dict(arrowstyle="-|>", color=COL_SEAL,
+                                    lw=1.4 * scale, shrinkA=0, shrinkB=0))
+        ax.plot([r_bore * 0.5, r_bore + 0.9], [y_seat * 0.45] * 2,
+                color=COL_SEAL, lw=0.7)
+        ax.text(r_bore + 1.0, y_seat * 0.45,
+                f"N₂ {F['cond'].P_up / 1e5:.0f} bar 壓在已坐封的閥芯上\n"
+                f"{params.delta_P * params.A_seat:.2f} N，與彈簧同向助封",
+                fontsize=6.5, color=COL_SEAL, ha="left", va="center")
+        return F
+
+    # 開啟：孔內上行（只畫在孔內，到閥芯底面為止）
+    ax.annotate("", xy=(r_bore * 0.5, _mm(S["y_pop_lo"]) - 0.05),
+                xytext=(r_bore * 0.5, y_in + 0.35),
+                arrowprops=dict(arrowstyle="-|>", color=COL_SEAL,
+                                lw=1.6 * scale, shrinkA=0, shrinkB=0))
+    # 簾幕轉折 + 徑向流出。以折線明畫 90 度轉折，不用 annotate 的
+    # "angle" connectionstyle——垂直分量為零時它會除以零（本模組先前
+    # 已在流道孔標註處踩過同一個雷）。
+    y_curtain = _mm(S["y_seat_top"]) + _mm(S["seat_gap"]) / 2
+    R_out_mm = _mm(G["R_shell"] + G["wall"])
+    ax.annotate("", xy=(r_pop + 1.3, y_curtain),
+                xytext=(r_bore * 0.5, y_curtain),
+                arrowprops=dict(arrowstyle="-|>", color=COL_SEAL,
+                                lw=1.6 * scale, shrinkA=0, shrinkB=0))
+    # 標籤拉到外殼右側淨空，並以折線引出：貼在閥芯右邊會壓到彈簧標籤
+    ax.plot([r_pop + 1.3, R_out_mm + 0.5, R_out_mm + 0.5],
+            [y_curtain, y_curtain, y_curtain - 1.5],
+            color=COL_SEAL, lw=0.7)
+    ax.text(R_out_mm + 0.65, y_curtain - 1.6,
+            f"簾幕 π·D·x = {F['A_eff'] * 1e6:.3f} mm²\n"
+            f"{'壅塞流' if F['choked'] else '次音速'} "
+            f"{F['mdot'] * 1e3:.2f} g/s\n徑向流出",
+            fontsize=6.5, color=COL_SEAL, ha="left", va="top")
+    return F
+
+
 def _draw_state(ax, params, x, G, label, sub):
     """在 ax 上畫單一作動狀態的半剖圖（真實比例）。"""
     S = state_geometry(params, x=x)
@@ -432,6 +512,8 @@ def _draw_state(ax, params, x, G, label, sub):
     ax.text(_mm(r_spr) + 0.35, _mm((S["y_spring_lo"] + S["y_spring_hi"]) / 2),
             f"彈簧 {_mm(S['L_spring']):.2f}\n{S['F_spring']:.2f} N ↓",
             fontsize=6.5, color=COL_MECH, ha="left", va="center")
+    # --- 流體路徑（閥關畫壓力，閥開畫流線）
+    _draw_flow(ax, params, x, G, S)
     # --- 座面基準線與運動箭頭
     ax.plot([0, _mm(R_out)], [_mm(S["y_seat_top"])] * 2, color=COL_SEAL,
             lw=0.7, ls=":", zorder=5)
@@ -522,11 +604,20 @@ def _draw_gap_detail(ax, params, x, G, color):
         ax.text(x_dim + 0.05, (y_seat + y_pop_lo) / 2,
                 f" 開度 {_mm(S['seat_gap']):.2f}", fontsize=8.5,
                 color=COL_MECH, ha="left", va="center")
-        ax.annotate("", xy=(r_bore * 0.45, y_pop_lo - 0.02),
+        # 孔內上行 → 簾幕徑向轉出：放大圖才看得清這個 90 度轉折
+        F = flow_state(params, x)
+        ax.annotate("", xy=(r_bore * 0.45, y_pop_lo - 0.015),
                     xytext=(r_bore * 0.45, y_lo + 0.05),
                     arrowprops=dict(arrowstyle="-|>", color=COL_SEAL, lw=1.6))
-        ax.text(r_bore + 0.05, (y_lo + y_seat) / 2 + 0.1, "流動", fontsize=7,
-                color=COL_SEAL, ha="left", va="center")
+        y_curtain = y_seat + (y_pop_lo - y_seat) / 2
+        ax.plot([r_bore * 0.45, r_bore * 0.45], [y_seat, y_curtain],
+                color=COL_SEAL, lw=1.6, solid_capstyle="butt")
+        ax.annotate("", xy=(r_show * 1.05, y_curtain),
+                    xytext=(r_bore * 0.45, y_curtain),
+                    arrowprops=dict(arrowstyle="-|>", color=COL_SEAL,
+                                    lw=1.6, shrinkA=0, shrinkB=0))
+        ax.text(r_bore + 0.06, y_lo + 0.08, "入口 ↑", fontsize=6,
+                color=COL_SEAL, ha="left", va="bottom")
     else:
         ax.plot([0, r_pop], [y_seat] * 2, color=COL_SEAL, lw=3.0,
                 solid_capstyle="butt", zorder=5)
@@ -548,6 +639,7 @@ def generate_actuation(params=N2_25BAR_PH_PARAMS):
     18.7 mm 的零件上只有 0.8% 高度，不放大則兩個狀態看起來完全一樣。
     """
     G = section_geometry(params)
+    F_open = flow_state(params, params.x_stroke)
     with matplotlib.rc_context(_CJK_FONT_RC):
         fig, axes = plt.subplots(2, 2, figsize=(10.5, 9.6),
                                  gridspec_kw={"height_ratios": [2.4, 1.0]})
@@ -573,7 +665,13 @@ def generate_actuation(params=N2_25BAR_PH_PARAMS):
                  f"方向恆向下（坐封方向）\n"
                  f"失效關閉：斷電後彈簧與壓差 "
                  f"{params.delta_P * params.A_seat:.2f} N 同向，"
-                 f"將動件組推回坐封",
+                 f"將動件組推回坐封\n"
+                 f"流體：氣體沿孔上行，在閥芯與座面之間的簾幕轉為徑向流出——"
+                 f"節流面是簾幕 π·D·x，不是孔本身\n"
+                 f"x_stroke = D/4 = {_mm(params.x_stroke):.2f} mm 時簾幕恰"
+                 f"追上孔面積 {F_open['a_bore'] * 1e6:.3f} mm²，"
+                 f"再多行程也買不到流量（壅塞 "
+                 f"{F_open['mdot'] * 1e3:.2f} g/s）",
                  ha="center", fontsize=8.5)
         fig.subplots_adjust(top=0.90, bottom=0.135, hspace=0.20)
         ACTUATION_OUT.parent.mkdir(parents=True, exist_ok=True)
