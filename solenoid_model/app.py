@@ -383,6 +383,8 @@ def render_layout_tab(params):
     })
 
     for path, cap in ((generate_layout.SECTION_OUT, "按比例剖面圖"),
+                      (generate_layout.ACTUATION_OUT,
+                       "作動前後對照（閥關 ↔ 閥開）"),
                       (generate_layout.ARCH_OUT, "架構圖")):
         if path.exists():
             st.image(str(path), caption=cap)

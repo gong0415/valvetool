@@ -11,8 +11,16 @@
 | `valve_schematic.png` | 整閥剖面示意圖 |
 | `winding_window_schematic.png` | 繞線窗口示意圖（`A_winding`／`k_fill`／`l_turn_mean`） |
 | `seal_land_schematic.png` | 密封 land 放大示意圖（`w_land`／`R_tip`／`A_seat`） |
+| `layout_section.png` | 實體佈局剖面圖（P8,按真實 mm 比例） |
+| `layout_actuation.png` | 作動前後對照圖（閥關 x=0 ↔ 閥開 x=x_stroke,含氣隙放大） |
+| `layout_architecture.png` | 四物理域架構圖與跨域耦合點 |
 
-三張示意圖皆由 `solenoid_model/report/generate_schematic.py` 產生,不手工編輯。
+上列前三張示意圖由 `solenoid_model/report/generate_schematic.py` 產生,
+後三張 P8 佈局圖由 `solenoid_model/report/generate_layout.py` 產生,皆不手工編輯。
+
+佈局圖的幾何全部由 `ValveParams`／`layout.py` 推導（線圈斷面由 `A_winding`
+反解、軸向鏈等於 `layout.axial_stack`、作動狀態遵循 `gap = g0 - x`）,
+不得在繪圖端硬寫尺寸常數,並由測試斷言幾何而非僅斷言 PNG 產出。
 
 ## 修改規格書
 

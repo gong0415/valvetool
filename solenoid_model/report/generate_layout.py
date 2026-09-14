@@ -1,7 +1,11 @@
-"""按比例剖面圖與架構圖（P8）。
+"""按比例剖面圖、作動前後對照圖與架構圖（P8）。
 
 剖面圖用真實 mm 比例（set_aspect("equal")），與 docs/spec/valve_schematic.png
 的符號示意圖不同——後者是參數對照用、不按比例。
+
+作動對照圖的上排為真實比例，下排放大圖只把銜鐵「中段」摺疊（不按比例）
+以突顯 0.05-0.20 mm 的間隙；間隙本身仍按 1:1 且兩狀態共用刻度，所以
+圖上的長度比等於真實比例。
 """
 import math
 from dataclasses import dataclass
@@ -18,6 +22,7 @@ from solenoid_model.cases import N2_25BAR_PH_PARAMS
 _DOCS = Path(__file__).resolve().parents[2] / "docs" / "spec"
 SECTION_OUT = _DOCS / "layout_section.png"
 ARCH_OUT = _DOCS / "layout_architecture.png"
+ACTUATION_OUT = _DOCS / "layout_actuation.png"
 
 COL_MAG = "#4477aa"     # 磁性件
 COL_NONMAG = "#bbbbbb"  # 非磁性件
@@ -154,6 +159,41 @@ def section_geometry(params=N2_25BAR_PH_PARAMS):
         "L_total": parts[-1][2],
         "spring_installed": spring_installed_length(params, spring),
         "r_spring_out": (spring.D_coil + spring.d_wire) / 2.0,
+    }
+
+
+def state_geometry(params=N2_25BAR_PH_PARAMS, x=0.0):
+    """作動狀態幾何 [m]：銜鐵位移 x 時各界面的位置。
+
+    遵循 dynamics 的唯一約定 gap = params.g0 - x（見 dynamics.coupled_rhs
+    與 simulate_closing 的 "armature returning to x=0"）：
+
+      x = 0          閥關：銜鐵坐在閥座上，氣隙最大 = g0
+      x = x_stroke   閥開：銜鐵被吸向固定極，氣隙最小 = g0 - x_stroke
+
+    行程間隙與工作氣隙是同一個剛體的兩端，此消彼長，和恆為
+    x_stroke + (g0 - x_stroke) = g0。static 剖面圖把兩者同時畫成最大，
+    是物理上不可能的狀態（銜鐵不能同時離座又離極最遠）。
+    """
+    if not 0.0 <= x <= params.x_stroke + 1e-15:
+        raise ValueError(
+            f"x={x * 1e3:.3f} mm 超出行程 0..{params.x_stroke * 1e3:.3f} mm")
+    G = section_geometry(params)
+    y_seat_top = G["span"]["閥座座體"][1]
+    t_arm = layout.armature_thickness(params)
+    # 銜鐵下緣 = 座面 + x（x=0 時貼座）；固定極下緣固定不動
+    y_arm_lo = y_seat_top + x
+    y_arm_hi = y_arm_lo + t_arm
+    y_pole_lo = y_seat_top + params.x_stroke + t_arm + (params.g0
+                                                        - params.x_stroke)
+    gap = params.g0 - x
+    return {
+        "base": G, "x": x, "gap": gap,
+        "seat_gap": x,
+        "y_seat_top": y_seat_top,
+        "y_arm_lo": y_arm_lo, "y_arm_hi": y_arm_hi,
+        "y_pole_lo": y_pole_lo,
+        "energised": x > 0.0,
     }
 
 
@@ -297,6 +337,209 @@ def generate_section(params=N2_25BAR_PH_PARAMS):
     return SECTION_OUT
 
 
+def _draw_state(ax, params, x, G, label, sub):
+    """在 ax 上畫單一作動狀態的半剖圖（真實比例）。"""
+    S = state_geometry(params, x=x)
+    span, coil = G["span"], G["coil"]
+    wall, R_shell, r_core = G["wall"], G["R_shell"], G["r_core"]
+    R_out = R_shell + wall
+    L = G["L_total"]
+    spring = G["spring"]
+    # 彈簧安裝長隨行程變化：閥開時再被多壓 x（腔體不變，彈簧更短）
+    L_spr = G["spring_installed"] - x
+
+    # 不動件：端板 x2、外殼、閥座座體、固定極
+    for name in ("端板（座端）", "端板（彈簧端）"):
+        lo, hi = span[name]
+        ax.add_patch(Rectangle((0, _mm(lo)), _mm(R_out), _mm(hi - lo),
+                               fc=COL_MAG, ec="k", lw=0.8))
+    ax.add_patch(Rectangle((_mm(R_shell), 0), _mm(wall), _mm(L),
+                           fc=COL_MAG, ec="k", lw=0.8))
+    lo, hi = span["閥座座體"]
+    ax.add_patch(Rectangle((0, _mm(lo)), _mm(R_out), _mm(hi - lo),
+                           fc=COL_NONMAG, ec="k", lw=0.8))
+    # 流道孔（挖空）：閥關時被銜鐵封住，閥開時連通
+    r_bore = _mm(params.D_seat_bore / 2)
+    ax.add_patch(Rectangle((0, 0), r_bore, _mm(hi),
+                           fc="w", ec="none", zorder=2))
+    ax.plot([0, r_bore, r_bore], [0, 0, _mm(hi)],
+            color=COL_SEAL, lw=1.2, zorder=3)
+    # 固定極（不動）
+    ax.add_patch(Rectangle((0, _mm(S["y_pole_lo"])), _mm(r_core),
+                           _mm(span["固定極"][1] - S["y_pole_lo"]),
+                           fc=COL_MAG, ec="k", lw=0.8))
+    ax.text(_mm(r_core) / 2, _mm((S["y_pole_lo"] + span["固定極"][1]) / 2),
+            "固定極", ha="center", va="center", fontsize=7, color="w")
+    # 線圈與隔離套（不動）
+    ax.add_patch(Rectangle((_mm(coil.r_in), _mm(coil.y_lo)),
+                           _mm(coil.width), _mm(coil.height),
+                           fc=COL_COIL, ec="k", lw=0.8))
+    ax.text(_mm((coil.r_in + coil.r_out) / 2),
+            _mm((coil.y_lo + coil.y_hi) / 2), "線圈",
+            ha="center", va="center", fontsize=7)
+    ax.add_patch(Rectangle((_mm(coil.r_in - G["t_sleeve"]), _mm(coil.y_lo)),
+                           _mm(G["t_sleeve"]), _mm(coil.height),
+                           fc="none", ec=COL_SEAL, lw=1.0, hatch="//"))
+    # 動件：銜鐵（依 x 位移）
+    ax.add_patch(Rectangle((0, _mm(S["y_arm_lo"])), _mm(r_core),
+                           _mm(S["y_arm_hi"] - S["y_arm_lo"]),
+                           fc=COL_MAG, ec="k", lw=1.4))
+    ax.text(_mm(r_core) / 2, _mm((S["y_arm_lo"] + S["y_arm_hi"]) / 2),
+            "銜鐵", ha="center", va="center", fontsize=7, color="w")
+    # 彈簧（安裝長隨 x 縮短：閥開時被多壓 x）
+    r_spr = G["r_spring_out"]
+    y_spr = span["彈簧腔"][0]
+    ax.add_patch(Rectangle((0, _mm(y_spr)), _mm(r_spr), _mm(L_spr),
+                           fc="none", ec=COL_MECH, lw=1.6, ls="--"))
+    ax.text(_mm(r_spr) + 0.3, _mm(y_spr + L_spr / 2),
+            f"彈簧\n{_mm(L_spr):.2f}", fontsize=6.5, color=COL_MECH,
+            ha="left", va="center")
+    # 座面位置與銜鐵運動方向：兩圖唯一的差別就在這裡
+    ax.plot([0, _mm(R_out)], [_mm(S["y_seat_top"])] * 2,
+            color=COL_SEAL, lw=0.7, ls=":", zorder=5)
+    if S["energised"]:
+        ax.annotate("", xy=(_mm(r_core) * 0.55, _mm(S["y_arm_lo"]) - 0.15),
+                    xytext=(_mm(r_core) * 0.55,
+                            _mm(S["y_arm_lo"]) - 1.5),
+                    arrowprops=dict(arrowstyle="-|>", color=COL_MECH,
+                                    lw=2.0))
+        ax.text(_mm(r_core) * 0.55 + 0.25, _mm(S["y_arm_lo"]) - 0.9,
+                f"上移 {_mm(params.x_stroke):.2f}", fontsize=7,
+                color=COL_MECH, ha="left", va="center")
+    ax.set_xlim(-1.0, _mm(R_out) + 3.4)
+    ax.set_ylim(-1.0, _mm(L) + 1.0)
+    ax.set_aspect("equal")
+    ax.set_xticks([]); ax.set_yticks([])
+    for s in ax.spines.values():
+        s.set_visible(False)
+    ax.set_title(f"{label}\n{sub}", fontsize=9.5)
+    return S
+
+
+def _draw_gap_detail(ax, params, x, G, color):
+    """氣隙區域放大圖：真實比例下 0.15 mm 看不見，故另開放大視窗。
+
+    視窗只取座面與固定極下緣之間，銜鐵本體僅露出上下各一小截（以剖斷
+    線示意其延續），否則 5.08 mm 厚的銜鐵會把 0.05-0.20 mm 的間隙壓成
+    看不見的細線——放大圖的重點是間隙，不是銜鐵。
+    """
+    S = state_geometry(params, x=x)
+    r_core = G["r_core"]
+    r_show = _mm(r_core)
+    r_bore = _mm(params.D_seat_bore / 2)
+
+    # 座標為「摺疊後」的繪圖座標（mm）：銜鐵中段 5.08 mm 不按比例，壓成
+    # 固定的 0.9 繪圖單位並以剖斷線標示。間隙（0.05-0.20 mm）與銜鐵端面
+    # 則按 1:1 真實比例，兩狀態共用同一刻度，所以 0.20 與 0.05 的長度比
+    # 在圖上仍是 4:1，可直接目視比較。
+    stub = 0.20             # 銜鐵端面露出高度（繪圖單位 = mm 真實）
+    body = 0.9              # 中段摺疊後的固定高度（不按比例）
+    y_seat = 0.0
+    y_arm_lo = y_seat + _mm(S["seat_gap"])
+    y_arm_hi_drawn = y_arm_lo + stub + body + stub
+    y_pole_lo = y_arm_hi_drawn + _mm(S["gap"])
+    y_lo, y_hi = y_seat - 0.45, y_pole_lo + 0.40
+
+    # 閥座座體
+    ax.add_patch(Rectangle((0, y_lo), r_show * 1.30, y_seat - y_lo,
+                           fc=COL_NONMAG, ec="k", lw=0.8))
+    ax.add_patch(Rectangle((0, y_lo), r_bore, y_seat - y_lo,
+                           fc="w", ec="none", zorder=2))
+    ax.plot([0, r_bore, r_bore], [y_lo, y_lo, y_seat],
+            color=COL_SEAL, lw=1.2, zorder=3)
+    ax.text(r_show * 0.72, y_lo + (y_seat - y_lo) / 2, "閥座",
+            fontsize=6.5, ha="center", va="center")
+    # 銜鐵：上下端面按真實比例，中段摺疊
+    ax.add_patch(Rectangle((0, y_arm_lo), r_show, stub,
+                           fc=COL_MAG, ec="k", lw=1.4))
+    ax.add_patch(Rectangle((0, y_arm_hi_drawn - stub), r_show, stub,
+                           fc=COL_MAG, ec="k", lw=1.4))
+    ax.add_patch(Rectangle((0, y_arm_lo + stub), r_show, body,
+                           fc=COL_MAG, ec="none", alpha=0.35))
+    for yb in (y_arm_lo + stub, y_arm_hi_drawn - stub):
+        ax.plot([0, r_show], [yb] * 2, color="k", lw=0.7,
+                ls=(0, (4, 2.5)), zorder=4)
+    ax.text(r_show * 0.5, y_arm_lo + stub + body / 2,
+            f"銜鐵 {_mm(layout.armature_thickness(params)):.2f}\n（中段不按比例）",
+            fontsize=6, ha="center", va="center")
+    # 固定極
+    ax.add_patch(Rectangle((0, y_pole_lo), r_show, y_hi - y_pole_lo,
+                           fc=COL_MAG, ec="k", lw=0.8))
+    ax.text(r_show * 0.5, y_pole_lo + (y_hi - y_pole_lo) / 2, "固定極",
+            fontsize=6.5, color="w", ha="center", va="center")
+
+    x_dim = r_show * 1.10
+    # 工作氣隙（真實比例）
+    ax.annotate("", xy=(x_dim, y_arm_hi_drawn), xytext=(x_dim, y_pole_lo),
+                arrowprops=dict(arrowstyle="<->", color=color, lw=1.3))
+    ax.text(x_dim + 0.05, (y_arm_hi_drawn + y_pole_lo) / 2,
+            f" 工作氣隙 {_mm(S['gap']):.2f}", fontsize=8.5, color=color,
+            ha="left", va="center")
+    # 座開度
+    if S["seat_gap"] > 0:
+        ax.annotate("", xy=(x_dim, y_seat), xytext=(x_dim, y_arm_lo),
+                    arrowprops=dict(arrowstyle="<->", color=COL_MECH, lw=1.3))
+        ax.text(x_dim + 0.05, (y_seat + y_arm_lo) / 2,
+                f" 開度 {_mm(S['seat_gap']):.2f}", fontsize=8.5,
+                color=COL_MECH, ha="left", va="center")
+        ax.annotate("", xy=(r_bore * 0.45, y_arm_lo - 0.02),
+                    xytext=(r_bore * 0.45, y_lo + 0.05),
+                    arrowprops=dict(arrowstyle="-|>", color=COL_SEAL, lw=1.6))
+        ax.text(r_bore + 0.06, (y_lo + y_seat) / 2 + 0.08, "流動",
+                fontsize=7, color=COL_SEAL, ha="left", va="center")
+    else:
+        ax.plot([0, r_show], [y_seat] * 2, color=COL_SEAL, lw=3.0,
+                solid_capstyle="butt", zorder=5)
+        # 標籤上移半個 stub，避免與座體內的「閥座」字樣同高相撞
+        ax.text(x_dim + 0.05, y_seat + stub * 0.7,
+                " 坐封：開度 0（無流動）", fontsize=8, color=COL_SEAL,
+                ha="left", va="center")
+    ax.set_xlim(-0.05, r_show * 2.45)
+    ax.set_ylim(y_lo - 0.05, y_hi + 0.05)
+    ax.set_aspect("equal")
+    ax.set_xticks([]); ax.set_yticks([])
+    for s in ax.spines.values():
+        s.set_visible(False)
+
+
+def generate_actuation(params=N2_25BAR_PH_PARAMS):
+    """作動前後對照圖：同一剛體的兩個位置，真實比例 + 氣隙放大。
+
+    上排真實比例看封裝，下排放大看間隙——0.15 mm 行程在 18.7 mm 的
+    零件上只有 0.8% 高度，不放大則兩個狀態看起來完全一樣。
+    """
+    G = section_geometry(params)
+    with matplotlib.rc_context(_CJK_FONT_RC):
+        fig, axes = plt.subplots(2, 2, figsize=(9.5, 9.0),
+                                 gridspec_kw={"height_ratios": [2.4, 1.0]})
+        _draw_state(axes[0][0], params, 0.0, G, "作動前（未通電）",
+                    "閥關：彈簧預載壓銜鐵坐封")
+        _draw_state(axes[0][1], params, params.x_stroke, G,
+                    "作動後（通電）", "閥開：磁吸力克服彈簧+壓差")
+        _draw_gap_detail(axes[1][0], params, 0.0, G, COL_MAG)
+        _draw_gap_detail(axes[1][1], params, params.x_stroke, G, COL_MAG)
+        axes[1][0].set_title("氣隙區放大", fontsize=8)
+        axes[1][1].set_title("氣隙區放大", fontsize=8)
+
+        fig.suptitle("電磁閥作動前後對照（半剖，單位 mm）", fontsize=12,
+                     y=0.975)
+        fig.text(0.5, 0.055,
+                 f"銜鐵是單一剛體：行程開度 + 工作氣隙 恆等於 g0 = "
+                 f"{_mm(params.g0):.2f} mm（dynamics 的 gap = g0 − x）\n"
+                 f"作動前 x=0：開度 0 ／ 氣隙 {_mm(params.g0):.2f} mm　→　"
+                 f"作動後 x={_mm(params.x_stroke):.2f} mm：開度 "
+                 f"{_mm(params.x_stroke):.2f} mm ／ 氣隙 "
+                 f"{_mm(params.g0 - params.x_stroke):.2f} mm\n"
+                 f"失效關閉：斷電後彈簧預載 {params.F_preload:.2f} N 與壓差 "
+                 f"{params.delta_P * params.A_seat:.2f} N 同向，將銜鐵推回坐封",
+                 ha="center", fontsize=8.5)
+        fig.subplots_adjust(top=0.90, bottom=0.135, hspace=0.18)
+        ACTUATION_OUT.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(ACTUATION_OUT, dpi=150)
+        plt.close(fig)
+    return ACTUATION_OUT
+
+
 def generate_architecture():
     """四個功能域方塊與跨域耦合點。"""
     with matplotlib.rc_context(_CJK_FONT_RC):
@@ -374,4 +617,5 @@ def generate_architecture():
 
 if __name__ == "__main__":
     print(generate_section())
+    print(generate_actuation())
     print(generate_architecture())
