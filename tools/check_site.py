@@ -37,7 +37,31 @@ def main():
     if not (SITE / "solenoid_model/app.py").is_file():
         sys.exit("進入點 solenoid_model/app.py 不在 site/ 底下")
 
-    print(f"檢查通過：{len(files)} 個檔案齊全")
+    # 反向檢查：generate_layout 會產生的圖，清單裡都必須有。上面的檢查只
+    # 驗「清單列的檔案存在」，漏列的圖它看不到——layout_actuation.png 新增
+    # 後就是這樣在頁面上 404，而 CI 全綠。
+    missing_figs = [p for p in _declared_figures() if p not in files]
+    if missing_figs:
+        for p in missing_figs:
+            print(f"圖檔未列入 build_site.PNGS: {p}")
+        sys.exit(f"檢查失敗：{len(missing_figs)} 張圖漏列，頁面會 404")
+
+    print(f"檢查通過：{len(files)} 個檔案齊全"
+          f"（含 {len(_declared_figures())} 張 app 會顯示的圖）")
+
+
+def _declared_figures():
+    """generate_layout 宣告為輸出的圖，轉成 repo 相對路徑。
+
+    直接讀模組的 *_OUT 常數，而不是另寫一份清單——後者會和模組脫鉤，
+    正是這個檢查要防的問題。
+    """
+    sys.path.insert(0, str(ROOT))
+    from solenoid_model.report import generate_layout as gl
+    return sorted(
+        str(pathlib.Path(p).resolve().relative_to(ROOT))
+        for p in (gl.SECTION_OUT, gl.ACTUATION_OUT, gl.ARCH_OUT)
+    )
 
 
 if __name__ == "__main__":

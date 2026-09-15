@@ -19,6 +19,7 @@ PNGS = [
     "docs/spec/winding_window_schematic.png",
     "docs/spec/seal_land_schematic.png",
     "docs/spec/layout_section.png",
+    "docs/spec/layout_actuation.png",
     "docs/spec/layout_architecture.png",
 ]
 
