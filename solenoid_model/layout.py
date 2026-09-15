@@ -67,6 +67,13 @@ LAYOUT_EMPIRICAL = {
         "reason": "閥芯厚度。承受 25 bar 壓差與坐封衝擊的最小厚度判斷；"
                   "本模型未解閥芯應力，故為封裝經驗值",
     },
+    "t_spring_seat": {
+        "value": 0.4e-3, "unit": "m", "source": "EMPIRICAL",
+        "reason": "固定彈簧座厚度：彈簧的上支承，承受 F_preload + k*x_stroke "
+                  "≈ 2.8 N。必須容於彈簧腔頂與銜鐵底之間的淨空（本案 "
+                  "0.55 mm），故取 0.4 mm 留 0.15 mm 裝配餘裕。動力學未用"
+                  "到此值，但少了它彈簧的上端就沒有支承面可畫",
+    },
 }
 
 # The spring design point solved in spec section 6: d=0.35 mm on a 1.8 mm
@@ -280,8 +287,15 @@ def axial_stack(params, t_seat_body=None, t_fixed_pole=None,
     so the list reads as the physical stack, not as a dict of parts.
 
     Order follows valve_schematic.png: seat at the bottom, then the poppet's
-    travel, the spring, the armature, the working gap, and the fixed pole
-    with the coil at the top. The spring sits BELOW the armature and above
+    travel, the poppet itself, the spring, the armature, the working gap, and
+    the fixed pole with the coil at the top.
+
+    The 閥芯 segment exists because the poppet occupies real axial length.
+    Without it the chain reserved only x_stroke between the seat and the
+    spring, so the 0.80 mm poppet ate into the spring cavity: poppet plus
+    installed spring needed 3.973 mm where the chain offered 3.873 mm, a
+    0.100 mm shortfall that pushed the spring's top face past the cavity and
+    put the fixed spring seat 0.600 mm inside the armature and the coil. The spring sits BELOW the armature and above
     the poppet because dynamics.spring_force is F_preload + k*x with x
     measured upward (the pull-in direction) and enters net_mechanical_force
     negatively: the spring force points down and grows as the armature
@@ -310,6 +324,7 @@ def axial_stack(params, t_seat_body=None, t_fixed_pole=None,
     segments = [
         ("閥座座體", t_seat_body),
         ("行程 x_stroke", params.x_stroke),
+        ("閥芯", LAYOUT_EMPIRICAL["t_poppet"]["value"]),
         ("彈簧腔", spring.L_free),
         ("銜鐵", armature_thickness(params, rho)),
         ("工作氣隙 g0", params.g0),

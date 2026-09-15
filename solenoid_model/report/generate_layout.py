@@ -128,9 +128,11 @@ def axial_parts(params, t_seat, t_pole, t_plate, spring):
     見 layout.axial_stack 的說明。
     """
     parts, y = [], 0.0
+    t_pop = layout.LAYOUT_EMPIRICAL["t_poppet"]["value"]
     for name, t in (("端板（座端）", t_plate),
                     ("閥座座體", t_seat),
                     ("行程", params.x_stroke),
+                    ("閥芯", t_pop),
                     ("彈簧腔", spring.L_free),
                     ("銜鐵", layout.armature_thickness(params)),
                     ("工作氣隙", params.g0),
@@ -199,6 +201,9 @@ def state_geometry(params=N2_25BAR_PH_PARAMS, x=0.0):
     t_pop = layout.LAYOUT_EMPIRICAL["t_poppet"]["value"]
     # 動件組（閥芯＋導杆＋銜鐵）整體平移 x：閥芯底面離座 x，銜鐵頂面
     # 逼近固定極，故 gap = g0 - x。固定極與彈簧座都不動。
+    # 閥關(x=0)時閥芯坐在座面上；行程是它上方的淨空，隨 x 被吃掉。
+    # 用 span["閥芯"][0] 當基準會讓 x=0 的閥芯浮在座上 0.15 mm——
+    # 尺寸鏈把「行程」排在閥芯之下（組裝淨空），但實體位置以座面為準。
     y_pop_lo = y_seat_top + x
     y_pop_hi = y_pop_lo + t_pop
     y_arm_hi = span["固定極"][0] - (params.g0 - x)
@@ -208,6 +213,12 @@ def state_geometry(params=N2_25BAR_PH_PARAMS, x=0.0):
     L_spring = G["spring_installed"] - x
     y_spring_lo = y_pop_hi
     y_spring_hi = y_spring_lo + L_spring
+    # 固定彈簧座：貼在彈簧腔頂（= 銜鐵底面）之下，不動。錨定在腔頂而非
+    # 彈簧頂端，否則它會隨行程移動（彈簧的上支承必須是固定面），也不會
+    # 像先前那樣長進銜鐵與線圈裡。
+    t_seat_spr = layout.LAYOUT_EMPIRICAL["t_spring_seat"]["value"]
+    y_seat_spr_hi = span["彈簧腔"][1]
+    y_seat_spr_lo = y_seat_spr_hi - t_seat_spr
     return {
         "base": G, "x": x, "gap": params.g0 - x,
         "seat_gap": x,
@@ -217,6 +228,8 @@ def state_geometry(params=N2_25BAR_PH_PARAMS, x=0.0):
         "y_pole_lo": span["固定極"][0],
         "y_spring_lo": y_spring_lo, "y_spring_hi": y_spring_hi,
         "L_spring": L_spring,
+        "y_seat_spr_lo": y_seat_spr_lo, "y_seat_spr_hi": y_seat_spr_hi,
+        "t_spring_seat": t_seat_spr,
         "F_spring": params.F_preload + params.k_spring * x,
         "energised": x > 0.0,
     }
@@ -272,12 +285,12 @@ def generate_section(params=N2_25BAR_PH_PARAMS):
                 f" 流道孔徑 D_seat_bore = {_mm(params.D_seat_bore):.2f} mm",
                 fontsize=7.5, color=COL_SEAL, ha="left", va="center")
         # --- 固定彈簧座：彈簧的上支承（不動），套在導杆外
-        ax.add_patch(Rectangle((_mm(r_stem), _mm(S["y_spring_hi"])),
-                               _mm(R_out - r_stem), _mm(0.5e-3),
+        ax.add_patch(Rectangle((_mm(r_stem), _mm(S["y_seat_spr_lo"])),
+                               _mm(R_out - r_stem), _mm(S["t_spring_seat"]),
                                fc=COL_NONMAG, ec="k"))
         ax.plot([_mm(R_out), x_lead - 0.3],
-                [_mm(S["y_spring_hi"]) + 0.25] * 2, color="k", lw=0.7)
-        ax.text(x_lead - 0.2, _mm(S["y_spring_hi"]) - 0.9,
+                [_mm(S["y_seat_spr_lo"]) + 0.2] * 2, color="k", lw=0.7)
+        ax.text(x_lead - 0.2, _mm(S["y_seat_spr_lo"]) - 0.9,
                 " 固定彈簧座（不動）：彈簧的上支承",
                 fontsize=7, color="k", ha="left", va="center")
         # --- 動件組：閥芯 + 導杆 + 銜鐵（閥關狀態 x=0）
@@ -474,8 +487,8 @@ def _draw_state(ax, params, x, G, label, sub):
     ax.plot([0, r_bore, r_bore], [0, 0, _mm(hi)], color=COL_SEAL, lw=1.2,
             zorder=3)
     # 固定彈簧座（不動）
-    ax.add_patch(Rectangle((_mm(r_stem), _mm(S["y_spring_hi"])),
-                           _mm(R_out - r_stem), _mm(0.5e-3),
+    ax.add_patch(Rectangle((_mm(r_stem), _mm(S["y_seat_spr_lo"])),
+                           _mm(R_out - r_stem), _mm(S["t_spring_seat"]),
                            fc=COL_NONMAG, ec="k", lw=0.8))
     # 固定極（不動）
     lo, hi = span["固定極"]

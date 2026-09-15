@@ -316,4 +316,4 @@ phi_c = 0.42     # 二維連續滲流理論值；文獻實測 0.40-0.50，故標
 
 ### 整閥包絡
 
-`layout.envelope(params, coil_OD)` 給出外徑與總長。`N2_25BAR_PH` 案例：外徑 20.0 mm × 總長 18.679 mm。
+`layout.envelope(params, coil_OD)` 給出外徑與總長。`N2_25BAR_PH` 案例：外徑 20.0 mm × 總長 19.479 mm。
