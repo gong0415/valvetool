@@ -5,6 +5,7 @@
 """
 import json
 import pathlib
+import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -50,18 +51,27 @@ def main():
           f"（含 {len(_declared_figures())} 張 app 會顯示的圖）")
 
 
+_FIG_RE = re.compile(
+    r'^[A-Z_]+_OUT\s*=\s*_DOCS\s*/\s*["\']([^"\']+\.png)["\']', re.M)
+
+
 def _declared_figures():
     """generate_layout 宣告為輸出的圖，轉成 repo 相對路徑。
 
-    直接讀模組的 *_OUT 常數，而不是另寫一份清單——後者會和模組脫鉤，
-    正是這個檢查要防的問題。
+    以正規式讀原始碼的 *_OUT 賦值，不 import 該模組：這個腳本與
+    build_site.py 一樣跑在只有標準庫的 CI 步驟裡（workflow 沒有任何
+    pip install），而 generate_layout 會拉進 matplotlib 與 scipy。
+    先前版本直接 import，於是 CI 以 ModuleNotFoundError 中止部署。
+
+    仍以模組本身為單一真相來源——只是改成讀而不是執行。
     """
-    sys.path.insert(0, str(ROOT))
-    from solenoid_model.report import generate_layout as gl
-    return sorted(
-        str(pathlib.Path(p).resolve().relative_to(ROOT))
-        for p in (gl.SECTION_OUT, gl.ACTUATION_OUT, gl.ARCH_OUT)
-    )
+    src = (ROOT / "solenoid_model" / "report"
+           / "generate_layout.py").read_text(encoding="utf-8")
+    names = _FIG_RE.findall(src)
+    if not names:
+        sys.exit("在 generate_layout.py 找不到任何 *_OUT 圖檔宣告——"
+                 "命名或寫法改了，請同步更新 _FIG_RE")
+    return sorted(f"docs/spec/{n}" for n in names)
 
 
 if __name__ == "__main__":
